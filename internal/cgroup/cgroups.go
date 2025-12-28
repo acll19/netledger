@@ -16,13 +16,11 @@ func GetPodByCgroupID(cgroupID uint64, pods []*v1.Pod) (*v1.Pod, error) {
 		return nil, fmt.Errorf("invalid cgroup ID: 0")
 	}
 
-	// Get the cgroup path from the cgroup ID by traversing the filesystem
 	cgroupPath, err := getCgroupPathByID(cgroupID)
 	if err != nil {
 		return nil, fmt.Errorf("cgroup not found: %w", err)
 	}
 
-	// Extract container ID from the cgroup path
 	containerID := extractContainerIDFromPath(cgroupPath)
 	if containerID == "" {
 		pod := findHostNetworkPod(cgroupPath, pods)
