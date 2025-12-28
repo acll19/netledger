@@ -1,4 +1,4 @@
-agent/kubezonnet_bpfeb.o
-agent/kubezonnet_bpfel.o
-kubezonnet-agent
-kubezonnet-server
+agent/netledger_bpfeb.o
+agent/netledger_bpfel.o
+netledger-agent
+netledger-server

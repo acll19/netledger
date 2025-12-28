@@ -1,23 +1,22 @@
 package agent
 
 import (
-	"bytes"
 	"context"
 	"errors"
-	"flag"
 	"fmt"
-	"io"
 	"log"
+	"log/slog"
 	"net"
-	"net/http"
 	"os"
 	"os/signal"
-	"path/filepath"
 	"strconv"
 	"strings"
 	"syscall"
 	"time"
 
+	"github.com/acll19/netledger/internal/byteorder"
+	"github.com/acll19/netledger/internal/cgroup"
+	"github.com/acll19/netledger/internal/payload"
 	"github.com/cilium/ebpf"
 	"github.com/cilium/ebpf/link"
 	"github.com/cilium/ebpf/rlimit"
@@ -25,91 +24,60 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/informers"
 	"k8s.io/client-go/kubernetes"
-	"k8s.io/client-go/rest"
+	"k8s.io/client-go/tools/cache"
 	"k8s.io/client-go/tools/clientcmd"
-	"k8s.io/client-go/util/homedir"
-
-	"github.com/polarsignals/kubezonnet/byteorder"
-	"github.com/polarsignals/kubezonnet/payload"
 )
 
-func Run(node, subnetCidr, server string, flushInterval time.Duration, debug, sendData bool) error {
+func Run(flushInterval time.Duration, node string) error {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-
-	config, err := rest.InClusterConfig()
-	if err != nil {
-		kubeconfig := filepath.Join(homedir.HomeDir(), ".kube", "config")
-		config, err = clientcmd.BuildConfigFromFlags("", kubeconfig)
-		if err != nil {
-			log.Fatalf("Error creating kubernetes config: %v", err)
-		}
-	}
-
-	clientset, err := kubernetes.NewForConfig(config)
-	if err != nil {
-		log.Fatalf("Error creating kubernetes client: %v", err)
-	}
-
-	fmt.Println("Watching pods for node: ", node)
-	factory := informers.NewSharedInformerFactoryWithOptions(clientset, 0,
-		informers.WithTweakListOptions(func(options *metav1.ListOptions) {
-			options.FieldSelector = "spec.nodeName=" + node
-		}))
-	informer := factory.Core().V1().Pods().Informer()
-	go informer.Run(ctx.Done())
-
-	ip, ipNet, err := net.ParseCIDR(subnetCidr)
-	if err != nil || ip == nil || ip.To4() == nil {
-		fmt.Println("Error: Invalid subnet CIDR")
-		flag.Usage()
-		os.Exit(1)
-	}
-
-	// Convert IP to uint32
-	ipUint := ipToUint32(ip)
-
-	// Convert subnet mask to uint32
-	maskUint := maskToUint32(ipNet.Mask)
-
-	// Print the converted values
-	fmt.Printf("Subnet CIDR: %s\n", subnetCidr)
-	fmt.Printf("IP Prefix: %s -> %x\n", ip.String(), ipUint)
-	fmt.Printf("Subnet Mask: %s -> %x\n", net.IP(ipNet.Mask).String(), maskUint)
 
 	// Remove resource limits for kernels <5.11.
 	if err := rlimit.RemoveMemlock(); err != nil {
 		return fmt.Errorf("removing memlock: %w", err)
 	}
 
-	// Load the compiled eBPF ELF and load it into the kernel.
-	spec, err := loadKubezonnet()
+	spec, err := loadNetledger()
 	if err != nil {
-		return fmt.Errorf("load eBPF program: %w", err)
+		return fmt.Errorf("loading netledger: %w", err)
 	}
 
-	if err := spec.RewriteConstants(map[string]interface{}{
-		"subnet_prefix": byteorder.Htonl(ipUint),
-		"subnet_mask":   byteorder.Htonl(maskUint),
-	}); err != nil {
-		return fmt.Errorf("configure eBPF program: %w", err)
-	}
-
-	var objs kubezonnetObjects
+	var objs netledgerObjects
 	if err := spec.LoadAndAssign(&objs, nil); err != nil {
 		return fmt.Errorf("load eBPF objects: %w", err)
 	}
 	defer objs.Close()
 
-	link, err := link.AttachNetfilter(link.NetfilterOptions{
-		ProtocolFamily: 2, // IPv4
-		HookNumber:     4, // netfilter postrouting
-		Program:        objs.NfPostroutingHook,
+	var activeLinks []link.Link
+	cgroupEgressLink, err := link.AttachCgroup(link.CgroupOptions{
+		Path:    "/sys/fs/cgroup",
+		Attach:  ebpf.AttachCGroupInetEgress,
+		Program: objs.EgressConnectionTracker,
 	})
 	if err != nil {
-		return fmt.Errorf("attach netfilter: %w", err)
+		return fmt.Errorf("attach cgroup skb: %w", err)
 	}
-	defer link.Close()
+	activeLinks = append(activeLinks, cgroupEgressLink)
+
+	cgroupIngressLink, err := link.AttachCgroup(link.CgroupOptions{
+		Path:    "/sys/fs/cgroup",
+		Attach:  ebpf.AttachCGroupInetIngress,
+		Program: objs.IngressConnectionTracker,
+	})
+	if err != nil {
+		return fmt.Errorf("attach cgroup skb: %w", err)
+	}
+	activeLinks = append(activeLinks, cgroupIngressLink)
+
+	log.Println("Number of active links: ", len(activeLinks))
+
+	defer func() {
+		for _, link := range activeLinks {
+			if err := link.Close(); err != nil {
+				slog.Error("error closing link object:", err)
+			}
+		}
+	}()
 
 	informer, err := setupPodInformer(ctx, node)
 	if err != nil {
@@ -129,13 +97,14 @@ func Run(node, subnetCidr, server string, flushInterval time.Duration, debug, se
 	for {
 		select {
 		case <-stop:
-			fmt.Println("Shutting down...")
+			slog.Info("Shutting down...")
 			return nil
 		case <-ctx.Done():
-			fmt.Println("Shutting down...")
+			slog.Info("Shutting down...")
 			return nil
 		case <-ticker.C:
-			log.Println("reading data from eBPF maps")
+			slog.Info("reading data from eBPF maps")
+
 			keys = keys[:size]
 			values = values[:size]
 			opts := &ebpf.BatchOptions{}
