@@ -3,7 +3,7 @@ package payload
 import (
 	"testing"
 
-	"github.com/acll19/netledger/pkg/byteorder"
+	"github.com/acll19/netledger/internal/byteorder"
 	"github.com/stretchr/testify/require"
 )
 

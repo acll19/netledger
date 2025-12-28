@@ -15,10 +15,12 @@ import (
 
 type netledgerIpKey struct {
 	_        structs.HostLayout
+	CgroupId uint64
 	SrcIp    uint32
 	DestIp   uint32
 	SrcPort  uint16
 	DestPort uint16
+	_        [4]byte
 }
 
 type netledgerIpValue struct {
