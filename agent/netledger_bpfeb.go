@@ -20,7 +20,7 @@ type netledgerIpKey struct {
 	DestIp   uint32
 	SrcPort  uint16
 	DestPort uint16
-	_        [4]byte
+	Pad      uint32
 }
 
 type netledgerIpValue struct {
