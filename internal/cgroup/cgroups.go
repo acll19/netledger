@@ -50,8 +50,6 @@ func GetPodByCgroupID(cgroupID uint64, pods []*v1.Pod) (*v1.Pod, error) {
 func findHostNetworkPod(cgroupPath string, pods []*v1.Pod) *v1.Pod {
 	for _, pod := range pods {
 		if pod.Spec.HostNetwork {
-			// For hostNetwork pods, we can try to match by pod UID in the cgroup path
-			// or by finding the docker/kubelet container associated with this pod
 			if matchesHostNetworkPod(cgroupPath, pod) {
 				return pod
 			}

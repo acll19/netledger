@@ -110,6 +110,7 @@ func Run(flushInterval time.Duration, node string) error {
 			opts := &ebpf.BatchOptions{}
 			cursor := new(ebpf.MapBatchCursor)
 			n, err := objs.IpMap.BatchLookupAndDelete(cursor, keys, values, opts)
+			slog.Debug("batch lookup result", "n", n, "err", err, "mapSize", objs.IpMap.MaxEntries())
 			if n <= 0 {
 				log.Println("no data, skipping")
 				continue
@@ -128,17 +129,24 @@ func Run(flushInterval time.Duration, node string) error {
 			log.Println("debug printing", len(fKeys), "keys", "started with", n, "keys before filtering to host-local pods (", len(keys), ")")
 			for i := 0; i < len(fKeys); i++ {
 				pod, err := cgroup.GetPodByCgroupID(fKeys[i].Cgroupid, podsOnHost)
+				var name, ns string
 				if err != nil {
-					// Silently skip host network traffic, system processes, and unknown containers
-					// These are normal and expected in any Kubernetes cluster
 					slog.Debug("skipping traffic from non-pod cgroup", "cgroup_id", fKeys[i].Cgroupid, "reason", err)
-					continue
+					name = "unknown"
+					ns = "unknown"
+				} else {
+					name = pod.Name
+					ns = pod.Namespace
 				}
-				log.Printf("Traffic from/to pod: %s/%s", pod.Namespace, pod.Name)
+
+				direction := "egress"
+				if fKeys[i].Direction == 1 {
+					direction = "ingress"
+				}
 
 				srcIP := net.IPv4(byte(fKeys[i].SrcIP), byte(fKeys[i].SrcIP>>8), byte(fKeys[i].SrcIP>>16), byte(fKeys[i].SrcIP>>24)).String()
 				dstIP := net.IPv4(byte(fKeys[i].DstIP), byte(fKeys[i].DstIP>>8), byte(fKeys[i].DstIP>>16), byte(fKeys[i].DstIP>>24)).String()
-				fmt.Printf("%s:%d -> %s:%d: %d bytes\n", srcIP, fKeys[i].SrcPort, dstIP, fKeys[i].DstPort, fValues[i].PacketSize)
+				fmt.Printf("[%s] %s:%d -> %s:%d: %d bytes (pod: %s/%s)\n", direction, srcIP, fKeys[i].SrcPort, dstIP, fKeys[i].DstPort, fValues[i].PacketSize, ns, name)
 			}
 		}
 	}

@@ -16,7 +16,7 @@ struct ip_key
     __u32 dest_ip;
     __u16 src_port;
     __u16 dest_port;
-    __u32 _pad;
+    __u8 direction; // 0 = egress, 1 = ingress
 };
 
 struct ip_value
@@ -40,7 +40,7 @@ struct
     // for GKE High Density configuration (256 pods) maybe use 131072
 } ip_map SEC(".maps");
 
-static __always_inline int handle_socket_packet(struct __sk_buff *skb)
+static __always_inline int handle_socket_packet(struct __sk_buff *skb, __u8 direction)
 {
     // allowed since v4.7+
     void *data = (void *)(long)skb->data;
@@ -68,6 +68,7 @@ static __always_inline int handle_socket_packet(struct __sk_buff *skb)
     key.cgroup_id = bpf_get_current_cgroup_id();
     key.src_ip = saddr;
     key.dest_ip = daddr;
+    key.direction = direction;
 
     if (proto == IPPROTO_TCP)
     {
@@ -112,11 +113,11 @@ static __always_inline int handle_socket_packet(struct __sk_buff *skb)
 SEC("cgroup_skb/egress")
 int egress_connection_tracker(struct __sk_buff *skb)
 {
-    return handle_socket_packet(skb);
+    return handle_socket_packet(skb, 0); // 0 = egress
 }
 
 SEC("cgroup_skb/ingress")
 int ingress_connection_tracker(struct __sk_buff *skb)
 {
-    return handle_socket_packet(skb);
+    return handle_socket_packet(skb, 1); // 1 = ingress
 }

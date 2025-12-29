@@ -9,12 +9,13 @@ import (
 
 // Key for the eBPF map representing IP pairs
 type IPKey struct {
-	Cgroupid uint64
-	SrcIP    uint32
-	DstIP    uint32
-	SrcPort  uint16
-	DstPort  uint16
-	_        [4]byte
+	Cgroupid  uint64
+	SrcIP     uint32
+	DstIP     uint32
+	SrcPort   uint16
+	DstPort   uint16
+	Direction uint8 // 0 = egress, 1 = ingress
+	_         [3]byte
 }
 
 // Value for the eBPF map representing total packet sizes
@@ -23,7 +24,7 @@ type IPValue struct {
 }
 
 func Encode(keys []IPKey, values []IPValue) []byte {
-	size := 4 + 28*len(keys) // The first 4 bytes encode the length, then 1 uint64, 2 uint32s, 2 uint16s, and 1 uint64 per entry in the data.
+	size := 4 + 29*len(keys) // The first 4 bytes encode the length, then 8+4+4+2+2+1+8 = 29 bytes per entry
 	buf := make([]byte, size)
 
 	binary.BigEndian.PutUint32(buf[:4], uint32(len(keys)))
@@ -35,8 +36,9 @@ func Encode(keys []IPKey, values []IPValue) []byte {
 		binary.BigEndian.PutUint32(buf[offset+12:offset+16], srcDst.DstIP)
 		binary.BigEndian.PutUint16(buf[offset+16:offset+18], srcDst.SrcPort)
 		binary.BigEndian.PutUint16(buf[offset+18:offset+20], srcDst.DstPort)
-		binary.BigEndian.PutUint64(buf[offset+20:offset+28], values[i].PacketSize)
-		offset += 28
+		buf[offset+20] = srcDst.Direction
+		binary.BigEndian.PutUint64(buf[offset+21:offset+29], values[i].PacketSize)
+		offset += 29
 	}
 
 	return buf
@@ -56,19 +58,20 @@ func Decode(buf []byte) ([]Entry, error) {
 	}
 	numEntries := binary.BigEndian.Uint32(buf[:4])
 
-	size := 4 + 28*numEntries // The first 4 bytes encode the length, then 1 uint64, 2 uint32s, 2 uint16s, and 1 uint64 per entry in the data.
+	size := 4 + 29*numEntries // The first 4 bytes encode the length, then 8+4+4+2+2+1+8 = 29 bytes per entry
 	if uint32(len(buf)) != size {
 		return nil, errors.New("unexpected length of buffer for number of entries")
 	}
 
 	entries := make([]Entry, numEntries)
 	for i := range numEntries {
-		offset := 4 + i*28
+		offset := 4 + i*29
 		srcIP := binary.BigEndian.Uint32(buf[offset+8 : offset+12])
 		dstIP := binary.BigEndian.Uint32(buf[offset+12 : offset+16])
 		srcPort := binary.BigEndian.Uint16(buf[offset+16 : offset+18])
 		dstPort := binary.BigEndian.Uint16(buf[offset+18 : offset+20])
-		traffic := binary.BigEndian.Uint64(buf[offset+20 : offset+28])
+		// direction is at buf[offset+20], skipping it for now
+		traffic := binary.BigEndian.Uint64(buf[offset+21 : offset+29])
 		entries[i] = Entry{
 			SrcIP:   byteorder.Ntohl(srcIP),
 			DstIP:   byteorder.Ntohl(dstIP),
