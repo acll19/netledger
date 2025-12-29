@@ -16,7 +16,6 @@ import (
 
 	"github.com/acll19/netledger/internal/byteorder"
 	"github.com/acll19/netledger/internal/cgroup"
-	"github.com/acll19/netledger/internal/payload"
 	"github.com/cilium/ebpf"
 	"github.com/cilium/ebpf/link"
 	"github.com/cilium/ebpf/rlimit"
@@ -92,8 +91,8 @@ func Run(flushInterval time.Duration, node string) error {
 	defer ticker.Stop()
 
 	size := objs.IpMap.MaxEntries()
-	keys := make([]payload.IPKey, size)
-	values := make([]payload.IPValue, size)
+	keys := make([]netledgerIpKey, size)
+	values := make([]netledgerIpValue, size)
 	for {
 		select {
 		case <-stop:
@@ -128,10 +127,10 @@ func Run(flushInterval time.Duration, node string) error {
 			// debug
 			log.Println("debug printing", len(fKeys), "keys", "started with", n, "keys before filtering to host-local pods (", len(keys), ")")
 			for i := 0; i < len(fKeys); i++ {
-				pod, err := cgroup.GetPodByCgroupID(fKeys[i].Cgroupid, podsOnHost)
+				pod, err := cgroup.GetPodByCgroupID(fKeys[i].CgroupId, podsOnHost)
 				var name, ns string
 				if err != nil {
-					slog.Debug("skipping traffic from non-pod cgroup", "cgroup_id", fKeys[i].Cgroupid, "reason", err)
+					slog.Debug("skipping traffic from non-pod cgroup", "cgroup_id", fKeys[i].CgroupId, "reason", err)
 					name = "unknown"
 					ns = "unknown"
 				} else {
@@ -144,9 +143,9 @@ func Run(flushInterval time.Duration, node string) error {
 					direction = "ingress"
 				}
 
-				srcIP := net.IPv4(byte(fKeys[i].SrcIP), byte(fKeys[i].SrcIP>>8), byte(fKeys[i].SrcIP>>16), byte(fKeys[i].SrcIP>>24)).String()
-				dstIP := net.IPv4(byte(fKeys[i].DstIP), byte(fKeys[i].DstIP>>8), byte(fKeys[i].DstIP>>16), byte(fKeys[i].DstIP>>24)).String()
-				fmt.Printf("[%s] %s:%d -> %s:%d: %d bytes (pod: %s/%s)\n", direction, srcIP, fKeys[i].SrcPort, dstIP, fKeys[i].DstPort, fValues[i].PacketSize, ns, name)
+				srcIpSrcIp := net.IPv4(byte(fKeys[i].SrcIp), byte(fKeys[i].SrcIp>>8), byte(fKeys[i].SrcIp>>16), byte(fKeys[i].SrcIp>>24)).String()
+				dstIpDstIp := net.IPv4(byte(fKeys[i].DstIp), byte(fKeys[i].DstIp>>8), byte(fKeys[i].DstIp>>16), byte(fKeys[i].DstIp>>24)).String()
+				fmt.Printf("[%s] %s:%d -> %s:%d: %d bytes (pod: %s/%s)\n", direction, srcIpSrcIp, fKeys[i].SrcPort, dstIpDstIp, fKeys[i].DstPort, fValues[i].PacketSize, ns, name)
 			}
 		}
 	}
@@ -195,7 +194,7 @@ func getPods(informer cache.SharedIndexInformer) []*v1.Pod {
 	return res
 }
 
-func filterSrcOrDstIpOnCurrentHost(keys []payload.IPKey, values []payload.IPValue, podsOnHost []*v1.Pod) ([]payload.IPKey, []payload.IPValue) {
+func filterSrcOrDstIpOnCurrentHost(keys []netledgerIpKey, values []netledgerIpValue, podsOnHost []*v1.Pod) ([]netledgerIpKey, []netledgerIpValue) {
 	ipsOnHost := make(map[uint32]struct{}, len(podsOnHost)) // pods may have multiple IPs so this is just an approximation
 
 	for _, pod := range podsOnHost {
@@ -210,14 +209,14 @@ func filterSrcOrDstIpOnCurrentHost(keys []payload.IPKey, values []payload.IPValu
 		}
 	}
 
-	resKeys := make([]payload.IPKey, 0, len(keys))
-	resValues := make([]payload.IPValue, 0, len(values))
+	resKeys := make([]netledgerIpKey, 0, len(keys))
+	resValues := make([]netledgerIpValue, 0, len(values))
 	for i := range keys {
-		if _, found := ipsOnHost[byteorder.Ntohl(keys[i].SrcIP)]; found {
+		if _, found := ipsOnHost[byteorder.Ntohl(keys[i].SrcIp)]; found {
 			resKeys = append(resKeys, keys[i])
 			resValues = append(resValues, values[i])
 		} else {
-			if _, found := ipsOnHost[byteorder.Ntohl(keys[i].DstIP)]; found {
+			if _, found := ipsOnHost[byteorder.Ntohl(keys[i].DstIp)]; found {
 				resKeys = append(resKeys, keys[i])
 				resValues = append(resValues, values[i])
 			}

@@ -13,9 +13,9 @@ struct ip_key
 {
     __u64 cgroup_id;
     __u32 src_ip;
-    __u32 dest_ip;
+    __u32 dst_ip;
     __u16 src_port;
-    __u16 dest_port;
+    __u16 dst_port;
     __u8 direction; // 0 = egress, 1 = ingress
 };
 
@@ -67,7 +67,7 @@ static __always_inline int handle_socket_packet(struct __sk_buff *skb, __u8 dire
     struct ip_key key = {};
     key.cgroup_id = bpf_get_current_cgroup_id();
     key.src_ip = saddr;
-    key.dest_ip = daddr;
+    key.dst_ip = daddr;
     key.direction = direction;
 
     if (proto == IPPROTO_TCP)
@@ -80,7 +80,7 @@ static __always_inline int handle_socket_packet(struct __sk_buff *skb, __u8 dire
         if ((void *)th + sizeof(struct tcphdr) > data_end)
             return 1;
         key.src_port = bpf_ntohs(th->source);
-        key.dest_port = bpf_ntohs(th->dest);
+        key.dst_port = bpf_ntohs(th->dest);
     }
     else if (proto == IPPROTO_UDP)
     {
@@ -89,7 +89,7 @@ static __always_inline int handle_socket_packet(struct __sk_buff *skb, __u8 dire
         if ((void *)uh + sizeof(struct udphdr) > data_end)
             return 1;
         key.src_port = bpf_ntohs(uh->source);
-        key.dest_port = bpf_ntohs(uh->dest);
+        key.dst_port = bpf_ntohs(uh->dest);
     }
     else
     {

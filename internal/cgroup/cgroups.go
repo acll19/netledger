@@ -47,6 +47,10 @@ func GetPodByCgroupID(cgroupID uint64, pods []*v1.Pod) (*v1.Pod, error) {
 }
 
 // findHostNetworkPod finds a pod with hostNetwork=true matching the cgroup path.
+// Note: For hostNetwork pods, this function has a limitation when multiple hostNetwork pods exist on the same node.
+// Since hostNetwork pods share the host's network namespace and have no container boundary in the cgroup path,
+// matching relies on pattern matching (pod UID in path or KinD indicators). The function will return the first
+// matching pod and cannot definitively distinguish between multiple hostNetwork pods with similar cgroup path patterns.
 func findHostNetworkPod(cgroupPath string, pods []*v1.Pod) *v1.Pod {
 	for _, pod := range pods {
 		if pod.Spec.HostNetwork {
