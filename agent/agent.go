@@ -1,12 +1,15 @@
 package agent
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"log"
 	"log/slog"
 	"net"
+	"net/http"
 	"os"
 	"os/signal"
 	"strconv"
@@ -16,6 +19,7 @@ import (
 
 	"github.com/acll19/netledger/internal/byteorder"
 	"github.com/acll19/netledger/internal/cgroup"
+	"github.com/acll19/netledger/internal/payload"
 	"github.com/cilium/ebpf"
 	"github.com/cilium/ebpf/link"
 	"github.com/cilium/ebpf/rlimit"
@@ -27,10 +31,7 @@ import (
 	"k8s.io/client-go/tools/clientcmd"
 )
 
-func Run(flushInterval time.Duration, node string) error {
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-
+func Run(flushInterval time.Duration, node, server string, debug bool) error {
 	// Remove resource limits for kernels <5.11.
 	if err := rlimit.RemoveMemlock(); err != nil {
 		return fmt.Errorf("removing memlock: %w", err)
@@ -77,6 +78,9 @@ func Run(flushInterval time.Duration, node string) error {
 			}
 		}
 	}()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
 
 	informer, err := setupPodInformer(ctx, node)
 	if err != nil {
@@ -126,11 +130,14 @@ func Run(flushInterval time.Duration, node string) error {
 
 			// debug
 			log.Println("debug printing", len(fKeys), "keys", "started with", n, "keys before filtering to host-local pods (", len(keys), ")")
-			for i := 0; i < len(fKeys); i++ {
+			entries := make([]payload.FlowEntry, 0, len(fKeys))
+			for i := range len(fKeys) {
 				pod, err := cgroup.GetPodByCgroupID(fKeys[i].CgroupId, podsOnHost)
 				var name, ns string
 				if err != nil {
-					slog.Debug("skipping traffic from non-pod cgroup", "cgroup_id", fKeys[i].CgroupId, "reason", err)
+					if debug {
+						slog.Info("skipping traffic from non-pod cgroup", "cgroup_id", fKeys[i].CgroupId, "reason", err)
+					}
 					name = "unknown"
 					ns = "unknown"
 				} else {
@@ -145,7 +152,29 @@ func Run(flushInterval time.Duration, node string) error {
 
 				srcIpSrcIp := net.IPv4(byte(fKeys[i].SrcIp), byte(fKeys[i].SrcIp>>8), byte(fKeys[i].SrcIp>>16), byte(fKeys[i].SrcIp>>24)).String()
 				dstIpDstIp := net.IPv4(byte(fKeys[i].DstIp), byte(fKeys[i].DstIp>>8), byte(fKeys[i].DstIp>>16), byte(fKeys[i].DstIp>>24)).String()
-				fmt.Printf("[%s] %s:%d -> %s:%d: %d bytes (pod: %s/%s)\n", direction, srcIpSrcIp, fKeys[i].SrcPort, dstIpDstIp, fKeys[i].DstPort, fValues[i].PacketSize, ns, name)
+
+				if debug {
+					slog.Info(fmt.Sprintf("[%s] %s:%d -> %s:%d: %d bytes (pod: %s/%s)\n", direction, srcIpSrcIp, fKeys[i].SrcPort, dstIpDstIp, fKeys[i].DstPort, fValues[i].PacketSize, ns, name))
+				}
+
+				entry := payload.FlowEntry{
+					Direction: direction,
+					SrcIP:     srcIpSrcIp,
+					SrcPort:   fKeys[i].SrcPort,
+					DstIP:     dstIpDstIp,
+					DstPort:   fKeys[i].DstPort,
+					Traffic:   fValues[i].PacketSize,
+				}
+				entries = append(entries, entry)
+			}
+
+			if len(entries) > 0 {
+				slog.Info(fmt.Sprintf("Sending %d entries to API server\n", len(entries)))
+				serverCtx := context.WithoutCancel(context.Background())
+				err := sendDataToServer(serverCtx, server, entries)
+				if err != nil {
+					slog.Error(err.Error())
+				}
 			}
 		}
 	}
@@ -238,4 +267,32 @@ func ipToUint32(ip net.IP) uint32 {
 		result |= uint32(num) << (24 - 8*i)
 	}
 	return result
+}
+
+func sendDataToServer(ctx context.Context, server string, flowEntries []payload.FlowEntry) error {
+	content := payload.Encode(flowEntries)
+	req, err := http.NewRequest("POST", server, bytes.NewReader(content))
+	if err != nil {
+		return fmt.Errorf("new request: %w", err)
+	}
+
+	req = req.WithContext(ctx)
+
+	client := http.DefaultClient
+	res, err := client.Do(req)
+	if err != nil {
+		return fmt.Errorf("do request: %w", err)
+	}
+	defer res.Body.Close()
+
+	respContent, err := io.ReadAll(res.Body)
+	if err != nil {
+		return fmt.Errorf("read response: %w", err)
+	}
+
+	if res.StatusCode != 200 {
+		return fmt.Errorf("write not successful: %s", string(respContent))
+	}
+
+	return nil
 }
