@@ -71,8 +71,9 @@ type netledgerSpecs struct {
 //
 // It can be passed ebpf.CollectionSpec.Assign.
 type netledgerProgramSpecs struct {
-	EgressConnectionTracker  *ebpf.ProgramSpec `ebpf:"egress_connection_tracker"`
-	IngressConnectionTracker *ebpf.ProgramSpec `ebpf:"ingress_connection_tracker"`
+	EgressConnectionTracker    *ebpf.ProgramSpec `ebpf:"egress_connection_tracker"`
+	EgressTcxConnectionTracker *ebpf.ProgramSpec `ebpf:"egress_tcx_connection_tracker"`
+	IngressConnectionTracker   *ebpf.ProgramSpec `ebpf:"ingress_connection_tracker"`
 }
 
 // netledgerMapSpecs contains maps before they are loaded into the kernel.
@@ -127,13 +128,15 @@ type netledgerVariables struct {
 //
 // It can be passed to loadNetledgerObjects or ebpf.CollectionSpec.LoadAndAssign.
 type netledgerPrograms struct {
-	EgressConnectionTracker  *ebpf.Program `ebpf:"egress_connection_tracker"`
-	IngressConnectionTracker *ebpf.Program `ebpf:"ingress_connection_tracker"`
+	EgressConnectionTracker    *ebpf.Program `ebpf:"egress_connection_tracker"`
+	EgressTcxConnectionTracker *ebpf.Program `ebpf:"egress_tcx_connection_tracker"`
+	IngressConnectionTracker   *ebpf.Program `ebpf:"ingress_connection_tracker"`
 }
 
 func (p *netledgerPrograms) Close() error {
 	return _NetledgerClose(
 		p.EgressConnectionTracker,
+		p.EgressTcxConnectionTracker,
 		p.IngressConnectionTracker,
 	)
 }

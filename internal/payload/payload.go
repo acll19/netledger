@@ -27,11 +27,22 @@ func Encode(flowEntries []FlowEntry) []byte {
 	return buf.Bytes()
 }
 
+func Decode(data []byte) ([]FlowEntry, error) {
+	var flowEntries []FlowEntry
+	err := json.Unmarshal(data, &flowEntries)
+	if err != nil {
+		return nil, err
+	}
+	return flowEntries, nil
+}
+
 type FlowEntry struct {
-	SrcIP     string `json:"srcIp"`
-	DstIP     string `json:"dstIp"`
-	SrcPort   uint16 `json:"srcPort"`
-	DstPort   uint16 `json:"dstPort"`
-	Traffic   uint64 `json:"traffic"`
-	Direction string `json:"direction"`
+	SrcIP        string `json:"srcIp"`
+	DstIP        string `json:"dstIp"`
+	SrcPort      uint16 `json:"srcPort"`
+	DstPort      uint16 `json:"dstPort"`
+	Traffic      uint64 `json:"traffic"`
+	Direction    string `json:"direction"`
+	PodName      string `json:"podName"`
+	PodNamespace string `json:"podNamespace"`
 }

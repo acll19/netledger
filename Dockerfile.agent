@@ -1,0 +1,4 @@
+FROM cgr.dev/chainguard/static
+USER root
+ADD netledger-agent /netledger-agent
+ENTRYPOINT ["/netledger-agent"]

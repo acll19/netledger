@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"syscall"
@@ -27,6 +28,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/informers"
 	"k8s.io/client-go/kubernetes"
+	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/cache"
 	"k8s.io/client-go/tools/clientcmd"
 )
@@ -68,6 +70,27 @@ func Run(flushInterval time.Duration, node, server string, debug bool) error {
 		return fmt.Errorf("attach cgroup skb: %w", err)
 	}
 	activeLinks = append(activeLinks, cgroupIngressLink)
+
+	ifaces, err := ListCiliumVeths()
+	if err != nil {
+		return fmt.Errorf("failed to list cilium veths: %w", err)
+	}
+
+	for _, iface := range ifaces {
+		// TODO when pods die, its link needs to be closed
+		// TODO avoid attaching the same veth twice
+		fmt.Println(iface.Name)
+		link, err := link.AttachTCX(link.TCXOptions{
+			Interface: iface.Index,
+			Program:   objs.EgressTcxConnectionTracker,
+			Attach:    ebpf.AttachType(ebpf.AttachTCXEgress),
+		})
+		if err != nil {
+			return fmt.Errorf("attach tcx program to interface %s: %w", iface.Name, err)
+		}
+
+		activeLinks = append(activeLinks, link)
+	}
 
 	log.Println("Number of active links: ", len(activeLinks))
 
@@ -112,6 +135,10 @@ func Run(flushInterval time.Duration, node, server string, debug bool) error {
 			values = values[:size]
 			opts := &ebpf.BatchOptions{}
 			cursor := new(ebpf.MapBatchCursor)
+			// TODO create a second map for tcx/egress
+			// TODO    only read pod to service from that map
+			// TODO    (need service CIDR or pod CIDR)
+			// TODO    (or pass service CIDR to kernel side)
 			n, err := objs.IpMap.BatchLookupAndDelete(cursor, keys, values, opts)
 			slog.Debug("batch lookup result", "n", n, "err", err, "mapSize", objs.IpMap.MaxEntries())
 			if n <= 0 {
@@ -158,12 +185,14 @@ func Run(flushInterval time.Duration, node, server string, debug bool) error {
 				}
 
 				entry := payload.FlowEntry{
-					Direction: direction,
-					SrcIP:     srcIpSrcIp,
-					SrcPort:   fKeys[i].SrcPort,
-					DstIP:     dstIpDstIp,
-					DstPort:   fKeys[i].DstPort,
-					Traffic:   fValues[i].PacketSize,
+					Direction:    direction,
+					SrcIP:        srcIpSrcIp,
+					SrcPort:      fKeys[i].SrcPort,
+					DstIP:        dstIpDstIp,
+					DstPort:      fKeys[i].DstPort,
+					Traffic:      fValues[i].PacketSize,
+					PodName:      name,
+					PodNamespace: ns,
 				}
 				entries = append(entries, entry)
 			}
@@ -181,19 +210,9 @@ func Run(flushInterval time.Duration, node, server string, debug bool) error {
 }
 
 func setupPodInformer(ctx context.Context, node string) (cache.SharedIndexInformer, error) {
-	kubeconfig := os.Getenv("KUBECONFIG")
-	if len(kubeconfig) == 0 {
-		return nil, errors.New("KUBECONFIG environment variable is not set")
-	}
-
-	config, err := clientcmd.BuildConfigFromFlags("", kubeconfig)
+	clientset, err := getKubernetesClient()
 	if err != nil {
-		return nil, fmt.Errorf("Error creating kubernetes config: %v", err)
-	}
-
-	clientset, err := kubernetes.NewForConfig(config)
-	if err != nil {
-		log.Fatalf("Error creating kubernetes client: %v", err)
+		return nil, fmt.Errorf("Error creating Kubernetes client %w", err)
 	}
 
 	log.Println("Watching pods for node: ", node)
@@ -210,6 +229,42 @@ func setupPodInformer(ctx context.Context, node string) (cache.SharedIndexInform
 	}
 
 	return informer, nil
+}
+
+// getKubernetesClient returns a Kubernetes clientset
+func getKubernetesClient() (*kubernetes.Clientset, error) {
+	var config *rest.Config
+	var err error
+
+	config, err = rest.InClusterConfig()
+	if err == nil {
+		clientset, err := kubernetes.NewForConfig(config)
+		if err != nil {
+			return nil, fmt.Errorf("error creating Kubernetes client (in-cluster): %w", err)
+		}
+		return clientset, nil
+	}
+
+	kubeconfig := os.Getenv("KUBECONFIG")
+	if kubeconfig == "" {
+		home, err := os.UserHomeDir()
+		if err != nil {
+			return nil, errors.New("cannot determine home directory for kubeconfig fallback")
+		}
+		kubeconfig = filepath.Join(home, ".kube", "config")
+	}
+
+	config, err = clientcmd.BuildConfigFromFlags("", kubeconfig)
+	if err != nil {
+		return nil, fmt.Errorf("error creating Kubernetes config from kubeconfig: %w", err)
+	}
+
+	clientset, err := kubernetes.NewForConfig(config)
+	if err != nil {
+		return nil, fmt.Errorf("error creating Kubernetes client: %w", err)
+	}
+
+	return clientset, nil
 }
 
 func getPods(informer cache.SharedIndexInformer) []*v1.Pod {
@@ -253,6 +308,23 @@ func filterSrcOrDstIpOnCurrentHost(keys []netledgerIpKey, values []netledgerIpVa
 	}
 
 	return resKeys, resValues
+}
+
+// ListCiliumVeths returns all network interfaces whose name starts with "lxc".
+func ListCiliumVeths() ([]net.Interface, error) {
+	ifaces, err := net.Interfaces()
+	if err != nil {
+		return nil, fmt.Errorf("failed to list interfaces: %w", err)
+	}
+
+	var ciliumIfaces []net.Interface
+	for _, iface := range ifaces {
+		if strings.HasPrefix(iface.Name, "lxc") {
+			ciliumIfaces = append(ciliumIfaces, iface)
+		}
+	}
+
+	return ciliumIfaces, nil
 }
 
 // ipToUint32 converts an IPv4 address to a uint32
