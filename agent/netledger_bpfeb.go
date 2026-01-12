@@ -87,6 +87,8 @@ type netledgerMapSpecs struct {
 //
 // It can be passed ebpf.CollectionSpec.Assign.
 type netledgerVariableSpecs struct {
+	ServiceSubnetMask   *ebpf.VariableSpec `ebpf:"service_subnet_mask"`
+	ServiceSubnetPrefix *ebpf.VariableSpec `ebpf:"service_subnet_prefix"`
 }
 
 // netledgerObjects contains all objects after they have been loaded into the kernel.
@@ -122,6 +124,8 @@ func (m *netledgerMaps) Close() error {
 //
 // It can be passed to loadNetledgerObjects or ebpf.CollectionSpec.LoadAndAssign.
 type netledgerVariables struct {
+	ServiceSubnetMask   *ebpf.Variable `ebpf:"service_subnet_mask"`
+	ServiceSubnetPrefix *ebpf.Variable `ebpf:"service_subnet_prefix"`
 }
 
 // netledgerPrograms contains all programs after they have been loaded into the kernel.

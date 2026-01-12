@@ -33,7 +33,7 @@ import (
 	"k8s.io/client-go/tools/clientcmd"
 )
 
-func Run(flushInterval time.Duration, node, server string, debug bool) error {
+func Run(flushInterval time.Duration, node, server, serviceCidr string, debug bool) error {
 	// Remove resource limits for kernels <5.11.
 	if err := rlimit.RemoveMemlock(); err != nil {
 		return fmt.Errorf("removing memlock: %w", err)
@@ -49,6 +49,22 @@ func Run(flushInterval time.Duration, node, server string, debug bool) error {
 		return fmt.Errorf("load eBPF objects: %w", err)
 	}
 	defer objs.Close()
+
+	ip, ipNet, err := net.ParseCIDR(serviceCidr)
+	if err != nil || ip == nil || ip.To4() == nil {
+		return fmt.Errorf("Invalid Service CIDR")
+	}
+
+	ipUint := ipToUint32(ip)
+	maskUint := maskToUint32(ipNet.Mask)
+
+	if err := spec.Variables["service_subnet_prefix"].Set(byteorder.Htonl(ipUint)); err != nil {
+		return fmt.Errorf("setting service prefix from CIDR: %w", err)
+	}
+
+	if err := spec.Variables["service_subnet_mask"].Set(byteorder.Htonl(maskUint)); err != nil {
+		return fmt.Errorf("setting service mask from CIDR: %w", err)
+	}
 
 	var activeLinks []link.Link
 	cgroupEgressLink, err := link.AttachCgroup(link.CgroupOptions{
@@ -135,10 +151,6 @@ func Run(flushInterval time.Duration, node, server string, debug bool) error {
 			values = values[:size]
 			opts := &ebpf.BatchOptions{}
 			cursor := new(ebpf.MapBatchCursor)
-			// TODO create a second map for tcx/egress
-			// TODO    only read pod to service from that map
-			// TODO    (need service CIDR or pod CIDR)
-			// TODO    (or pass service CIDR to kernel side)
 			n, err := objs.IpMap.BatchLookupAndDelete(cursor, keys, values, opts)
 			slog.Debug("batch lookup result", "n", n, "err", err, "mapSize", objs.IpMap.MaxEntries())
 			if n <= 0 {
@@ -337,6 +349,15 @@ func ipToUint32(ip net.IP) uint32 {
 			log.Fatalf("Error converting IP part to integer: %s", err)
 		}
 		result |= uint32(num) << (24 - 8*i)
+	}
+	return result
+}
+
+// maskToUint32 converts a net.IPMask to a uint32
+func maskToUint32(mask net.IPMask) uint32 {
+	var result uint32
+	for _, byteValue := range mask {
+		result = (result << 8) | uint32(byteValue)
 	}
 	return result
 }

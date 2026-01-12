@@ -26,6 +26,9 @@ struct ip_value
     __u64 packet_size;
 };
 
+volatile const __u32 service_subnet_prefix;
+volatile const __u32 service_subnet_mask;
+
 struct
 {
     __uint(type, BPF_MAP_TYPE_HASH);
@@ -127,7 +130,7 @@ int ingress_connection_tracker(struct __sk_buff *skb)
 SEC("tcx/egress")
 int egress_tcx_connection_tracker(struct __sk_buff *skb)
 {
-    void *data     = (void *)(long)skb->data;
+    void *data = (void *)(long)skb->data;
     void *data_end = (void *)(long)skb->data_end;
 
     struct ethhdr *eth = data;
@@ -155,17 +158,26 @@ int egress_tcx_connection_tracker(struct __sk_buff *skb)
         iph->protocol != IPPROTO_UDP)
         return TC_ACT_OK;
 
+    // Do not count if not a pod to service or service to pod
+    if ((iph->saddr & service_subnet_mask) != service_subnet_prefix || (iph->daddr & service_subnet_mask) != service_subnet_prefix)
+    {
+        return TC_ACT_OK;
+    }
+
     __u16 src_port = 0;
     __u16 dst_port = 0;
 
-    if (iph->protocol == IPPROTO_TCP) {
+    if (iph->protocol == IPPROTO_TCP)
+    {
         struct tcphdr *tcph = (void *)iph + ip_hdr_len;
         if ((void *)(tcph + 1) > data_end)
             return TC_ACT_OK;
 
         src_port = bpf_ntohs(tcph->source);
         dst_port = bpf_ntohs(tcph->dest);
-    } else {
+    }
+    else
+    {
         struct udphdr *udph = (void *)iph + ip_hdr_len;
         if ((void *)(udph + 1) > data_end)
             return TC_ACT_OK;
@@ -176,20 +188,23 @@ int egress_tcx_connection_tracker(struct __sk_buff *skb)
 
     struct ip_key key = {};
     key.cgroup_id = bpf_get_current_cgroup_id();
-    key.src_ip    = iph->saddr;
-    key.dst_ip    = iph->daddr;
-    key.src_port  = src_port;
-    key.dst_port  = dst_port;
+    key.src_ip = iph->saddr;
+    key.dst_ip = iph->daddr;
+    key.src_port = src_port;
+    key.dst_port = dst_port;
     key.direction = 0; /* egress */
 
-    struct ip_value *val = bpf_map_lookup_elem(&ip_map, &key);
-    if (val) {
-        __sync_fetch_and_add(&val->packet_size, skb->len);
-    } else {
-        struct ip_value new_val = {
+    struct ip_value *v = bpf_map_lookup_elem(&ip_map, &key);
+    if (v)
+    {
+        __sync_fetch_and_add(&v->packet_size, skb->len);
+    }
+    else
+    {
+        struct ip_value newv = {
             .packet_size = skb->len,
         };
-        bpf_map_update_elem(&ip_map, &key, &new_val, BPF_ANY);
+        bpf_map_update_elem(&ip_map, &key, &newv, BPF_ANY);
     }
 
     return TC_ACT_OK;
