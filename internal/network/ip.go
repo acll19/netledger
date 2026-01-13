@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"log"
 	"net"
+	"net/netip"
 	"strconv"
 	"strings"
 )
@@ -54,4 +55,33 @@ func StringIpToNetIp(ip string) (net.IP, error) {
 		return nil, fmt.Errorf("invalid IP address: %s", ip)
 	}
 	return parsedIP, nil
+}
+
+func Uint32ToIP(n uint32) net.IP {
+	return net.IPv4(
+		byte(n>>24),
+		byte(n>>16),
+		byte(n>>8),
+		byte(n),
+	)
+}
+
+// isInternetIP returns true if the IP is globally routable
+// on the public Internet.
+func IsInternetIP(ip netip.Addr) bool {
+	// Must be global unicast
+	if !ip.IsGlobalUnicast() {
+		return false
+	}
+
+	if ip.IsPrivate() ||
+		ip.IsLoopback() ||
+		ip.IsLinkLocalUnicast() ||
+		ip.IsLinkLocalMulticast() ||
+		ip.IsMulticast() ||
+		ip.IsUnspecified() {
+		return false
+	}
+
+	return true
 }

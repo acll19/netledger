@@ -19,6 +19,7 @@ import (
 	"sync"
 
 	classifierK8s "github.com/acll19/netledger/internal/classifier/kubernetes"
+	"github.com/acll19/netledger/internal/classifier/statistics"
 	k8s "github.com/acll19/netledger/internal/kubernetes"
 	"github.com/acll19/netledger/internal/network"
 	"github.com/acll19/netledger/internal/payload"
@@ -38,26 +39,14 @@ type NodeInfo struct {
 	Zone string
 }
 
-type FlowSize struct {
-	traffic uint64
-}
-
-type FlowKey struct {
-	podName    string
-	namespace  string
-	internet   bool
-	sameZone   bool
-	sameRegion bool
-}
-
 type Server struct {
 	clientset     *kubernetes.Clientset
-	podIpIndex    map[uint32]podKey // maps Pod IPv4s to Pod name
-	nodeIpIndex   map[uint32]string // maps Node IPv4s to Node name (for hostNetwork pods)
-	podIndex      map[podKey]PodInfo
+	podIpIndex    map[uint32]statistics.PodKey // maps Pod IPv4s to Pod name
+	nodeIpIndex   map[uint32]string            // maps Node IPv4s to Node name (for hostNetwork pods)
+	podIndex      map[statistics.PodKey]PodInfo
 	nodeIndex     map[string]string // maps node name to Node zone
-	ingStatistics map[FlowKey]FlowSize
-	egStatistics  map[FlowKey]FlowSize
+	ingStatistics statistics.StatisticMap
+	egStatistics  statistics.StatisticMap
 	mutex         sync.RWMutex
 }
 
@@ -69,12 +58,12 @@ func main() {
 
 	server := &Server{
 		clientset:     clientset,
-		podIpIndex:    map[uint32]podKey{},
+		podIpIndex:    map[uint32]statistics.PodKey{},
 		nodeIpIndex:   map[uint32]string{},
-		podIndex:      map[podKey]PodInfo{},
+		podIndex:      map[statistics.PodKey]PodInfo{},
 		nodeIndex:     map[string]string{},
-		ingStatistics: map[FlowKey]FlowSize{},
-		egStatistics:  map[FlowKey]FlowSize{},
+		ingStatistics: statistics.StatisticMap{},
+		egStatistics:  statistics.StatisticMap{},
 	}
 
 	// Start watching Pods and Nodes
@@ -145,9 +134,9 @@ func (s *Server) handlePod(obj interface{}) {
 	}
 
 	s.mutex.Lock()
-	s.podIndex[podKey{
-		namespace: pod.Namespace,
-		name:      pod.Name,
+	s.podIndex[statistics.PodKey{
+		Namespace: pod.Namespace,
+		Name:      pod.Name,
 	}] = PodInfo{
 		Node: pod.Spec.NodeName,
 		IPs:  ips,
@@ -158,9 +147,9 @@ func (s *Server) handlePod(obj interface{}) {
 		if hostIP != 0 && ip == hostIP {
 			s.nodeIpIndex[ip] = pod.Spec.NodeName
 		} else {
-			s.podIpIndex[ip] = podKey{
-				namespace: pod.Namespace,
-				name:      pod.Name,
+			s.podIpIndex[ip] = statistics.PodKey{
+				Namespace: pod.Namespace,
+				Name:      pod.Name,
 			}
 		}
 	}
@@ -171,19 +160,14 @@ func (s *Server) onPodUpdate(oldObj, newObj interface{}) {
 	s.handlePod(newObj)
 }
 
-type podKey struct {
-	namespace string
-	name      string
-}
-
 func (s *Server) onPodDelete(obj interface{}) {
 	pod, ok := obj.(*v1.Pod)
 	if !ok {
 		return
 	}
-	k := podKey{
-		namespace: pod.Namespace,
-		name:      pod.Name,
+	k := statistics.PodKey{
+		Namespace: pod.Namespace,
+		Name:      pod.Name,
 	}
 
 	// Get the host IP to check for hostNetwork pods
@@ -269,15 +253,6 @@ type flowLog struct {
 	bytes   int
 }
 
-func Uint32ToIP(n uint32) net.IP {
-	return net.IPv4(
-		byte(n>>24),
-		byte(n>>16),
-		byte(n>>8),
-		byte(n),
-	)
-}
-
 func (s *Server) handlePayload(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "Invalid request method", http.StatusMethodNotAllowed)
@@ -300,10 +275,10 @@ func (s *Server) handlePayload(w http.ResponseWriter, r *http.Request) {
 
 	s.mutex.Lock()
 
-	processedIngressPods := make(map[string]podKey)
-	processedEgressPods := make(map[string]podKey)
+	processedIngressPods := make(map[string]statistics.PodKey)
+	processedEgressPods := make(map[string]statistics.PodKey)
 	for _, entry := range data {
-		var srcPod, dstPod podKey
+		var srcPod, dstPod statistics.PodKey
 		srcIp := entry.SrcIP
 		dstIp := entry.DstIP
 		var srcZone, dstZone string // TODO src & dst regions too
@@ -311,19 +286,19 @@ func (s *Server) handlePayload(w http.ResponseWriter, r *http.Request) {
 		switch entry.Direction {
 		case "egress":
 			if entry.PodName != "unknown" {
-				processedEgressPods[srcIp] = podKey{
-					namespace: entry.PodNamespace,
-					name:      entry.PodName,
+				processedEgressPods[srcIp] = statistics.PodKey{
+					Namespace: entry.PodNamespace,
+					Name:      entry.PodName,
 				}
-				srcPod = podKey{
-					namespace: entry.PodNamespace,
-					name:      entry.PodName,
+				srcPod = statistics.PodKey{
+					Namespace: entry.PodNamespace,
+					Name:      entry.PodName,
 				}
 			} else {
 				if podMeta, ok := processedEgressPods[srcIp]; ok {
-					srcPod = podKey{
-						namespace: podMeta.namespace,
-						name:      podMeta.name,
+					srcPod = statistics.PodKey{
+						Namespace: podMeta.Namespace,
+						Name:      podMeta.Name,
 					}
 				} else {
 					parsedIP, err := network.StringIpToNetIp(srcIp)
@@ -342,19 +317,19 @@ func (s *Server) handlePayload(w http.ResponseWriter, r *http.Request) {
 			}
 		case "ingress":
 			if entry.PodName != "unknown" {
-				processedIngressPods[dstIp] = podKey{
-					namespace: entry.PodNamespace,
-					name:      entry.PodName,
+				processedIngressPods[dstIp] = statistics.PodKey{
+					Namespace: entry.PodNamespace,
+					Name:      entry.PodName,
 				}
-				dstPod = podKey{
-					namespace: entry.PodNamespace,
-					name:      entry.PodName,
+				dstPod = statistics.PodKey{
+					Namespace: entry.PodNamespace,
+					Name:      entry.PodName,
 				}
 			} else {
 				if podMeta, ok := processedIngressPods[dstIp]; ok {
-					dstPod = podKey{
-						namespace: podMeta.namespace,
-						name:      podMeta.name,
+					dstPod = statistics.PodKey{
+						Namespace: podMeta.Namespace,
+						Name:      podMeta.Name,
 					}
 				} else {
 					parsedIP, err := network.StringIpToNetIp(dstIp)
@@ -388,41 +363,41 @@ func (s *Server) handlePayload(w http.ResponseWriter, r *http.Request) {
 		}
 
 		flowLogs = append(flowLogs, flowLog{
-			src:     fmt.Sprintf("%s/%s", srcPod.namespace, srcPod.name),
+			src:     fmt.Sprintf("%s/%s", srcPod.Namespace, srcPod.Name),
 			srcIp:   srcParsed,
 			srcPort: int(entry.SrcPort),
-			dst:     fmt.Sprintf("%s/%s", dstPod.namespace, dstPod.name),
+			dst:     fmt.Sprintf("%s/%s", dstPod.Namespace, dstPod.Name),
 			dstIP:   dstParsed,
 			dstPort: int(entry.DstPort),
 			bytes:   int(entry.Traffic),
 		})
 
-		currentFlowSize := FlowSize{
-			traffic: entry.Traffic,
+		currentFlowSize := statistics.FlowSize{
+			Traffic: entry.Traffic,
 		}
 
-		flowKey := FlowKey{
-			internet:   isInternetIP(srcParsed) || isInternetIP(dstParsed),
-			sameZone:   srcZone == dstZone,
-			sameRegion: false, // TODO implement
+		flowKey := statistics.FlowKey{
+			Internet:   network.IsInternetIP(srcParsed) || network.IsInternetIP(dstParsed),
+			SameZone:   srcZone == dstZone,
+			SameRegion: false, // TODO implement
 		}
 
 		if entry.Direction == "ingress" {
-			flowKey.podName = dstPod.name
-			flowKey.namespace = dstPod.namespace
+			flowKey.PodName = dstPod.Name
+			flowKey.Namespace = dstPod.Namespace
 
 			if fs, found := s.ingStatistics[flowKey]; found {
-				fs.traffic += currentFlowSize.traffic
+				fs.Traffic += currentFlowSize.Traffic
 				s.ingStatistics[flowKey] = fs
 			} else {
 				s.ingStatistics[flowKey] = currentFlowSize
 			}
 		} else {
-			flowKey.podName = srcPod.name
-			flowKey.namespace = srcPod.namespace
+			flowKey.PodName = srcPod.Name
+			flowKey.Namespace = srcPod.Namespace
 
 			if fs, found := s.egStatistics[flowKey]; found {
-				fs.traffic += currentFlowSize.traffic
+				fs.Traffic += currentFlowSize.Traffic
 				s.egStatistics[flowKey] = fs
 			} else {
 				s.egStatistics[flowKey] = currentFlowSize
@@ -453,45 +428,9 @@ func (s *Server) handlePayload(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// isInternetIP returns true if the IP is globally routable
-// on the public Internet.
-func isInternetIP(ip netip.Addr) bool {
-	// Must be global unicast
-	if !ip.IsGlobalUnicast() {
-		return false
-	}
-
-	if ip.IsPrivate() ||
-		ip.IsLoopback() ||
-		ip.IsLinkLocalUnicast() ||
-		ip.IsLinkLocalMulticast() ||
-		ip.IsMulticast() ||
-		ip.IsUnspecified() {
-		return false
-	}
-
-	return true
-}
-
-var (
-	ingressDesc = prometheus.NewDesc(
-		"netledger_pod_network_ingress_bytes_total",
-		"The amount of traffic ingressed to the pod",
-		[]string{"namespace", "pod_name", "internet", "same_region", "same_zone"},
-		nil,
-	)
-
-	egressDesc = prometheus.NewDesc(
-		"netledger_pod_network_egress_bytes_total",
-		"The amount of traffic egressed from the pod",
-		[]string{"namespace", "pod_name", "internet", "same_region", "same_zone"},
-		nil,
-	)
-)
-
 func (s *Server) Describe(ch chan<- *prometheus.Desc) {
-	ch <- ingressDesc
-	ch <- egressDesc
+	ch <- statistics.IngressDesc
+	ch <- statistics.EgressDesc
 }
 
 func (s *Server) Collect(ch chan<- prometheus.Metric) {
@@ -500,27 +439,27 @@ func (s *Server) Collect(ch chan<- prometheus.Metric) {
 
 	for fk, s := range s.ingStatistics {
 		ch <- prometheus.MustNewConstMetric(
-			ingressDesc,
+			statistics.IngressDesc,
 			prometheus.CounterValue,
-			float64(s.traffic),
-			fk.namespace,
-			fk.podName,
-			strconv.FormatBool(fk.internet),
-			strconv.FormatBool(fk.sameRegion),
-			strconv.FormatBool(fk.sameZone),
+			float64(s.Traffic),
+			fk.Namespace,
+			fk.PodName,
+			strconv.FormatBool(fk.Internet),
+			strconv.FormatBool(fk.SameRegion),
+			strconv.FormatBool(fk.SameZone),
 		)
 	}
 
 	for fk, s := range s.egStatistics {
 		ch <- prometheus.MustNewConstMetric(
-			egressDesc,
+			statistics.EgressDesc,
 			prometheus.CounterValue,
-			float64(s.traffic),
-			fk.namespace,
-			fk.podName,
-			strconv.FormatBool(fk.internet),
-			strconv.FormatBool(fk.sameRegion),
-			strconv.FormatBool(fk.sameZone),
+			float64(s.Traffic),
+			fk.Namespace,
+			fk.PodName,
+			strconv.FormatBool(fk.Internet),
+			strconv.FormatBool(fk.SameRegion),
+			strconv.FormatBool(fk.SameZone),
 		)
 	}
 }
