@@ -49,7 +49,7 @@ func Run(flushInterval time.Duration, node, server, serviceCidr string, debug bo
 		return fmt.Errorf("Invalid Service CIDR")
 	}
 
-	ipUint := network.InterfacepToUint32(ip)
+	ipUint := network.IpToUint32(ip)
 	maskUint := network.MaskToUint32(ipNet.Mask)
 
 	if err := spec.Variables["service_subnet_prefix"].Set(byteorder.Htonl(ipUint)); err != nil {
@@ -226,7 +226,7 @@ func filterSrcOrDstIpOnCurrentHost(keys []bpf.NetLedgerIpKey, values []bpf.NetLe
 				continue
 			}
 
-			ipsOnHost[network.InterfacepToUint32(ip)] = struct{}{}
+			ipsOnHost[network.IpToUint32(ip)] = struct{}{}
 		}
 	}
 

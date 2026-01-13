@@ -9,7 +9,7 @@ import (
 )
 
 // ipToUint32 converts an IPv4 address to a uint32
-func InterfacepToUint32(ip net.IP) uint32 {
+func IpToUint32(ip net.IP) uint32 {
 	parts := strings.Split(ip.String(), ".")
 	var result uint32
 	for i, part := range parts {

@@ -15,21 +15,19 @@ import (
 	"net"
 	"net/http"
 	"net/netip"
-	"os"
 	"strconv"
 	"strings"
 	"sync"
 
+	classifierK8s "github.com/acll19/netledger/internal/classifier/kubernetes"
+	k8s "github.com/acll19/netledger/internal/kubernetes"
+	"github.com/acll19/netledger/internal/network"
 	"github.com/acll19/netledger/internal/payload"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promauto"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	v1 "k8s.io/api/core/v1"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/apimachinery/pkg/fields"
 	"k8s.io/client-go/kubernetes"
-	"k8s.io/client-go/tools/cache"
-	"k8s.io/client-go/tools/clientcmd"
 )
 
 type PodInfo struct {
@@ -65,17 +63,7 @@ type Server struct {
 }
 
 func main() {
-	kubeconfig := os.Getenv("KUBECONFIG")
-	if len(kubeconfig) == 0 {
-		log.Fatal("KUBECONFIG environment variable is not set")
-	}
-
-	config, err := clientcmd.BuildConfigFromFlags("", kubeconfig)
-	if err != nil {
-		log.Fatalf("Error creating kubernetes config: %v", err)
-	}
-
-	clientset, err := kubernetes.NewForConfig(config)
+	clientset, err := k8s.GetKubernetesClient()
 	if err != nil {
 		log.Fatalf("Error creating kubernetes client: %v", err)
 	}
@@ -120,58 +108,11 @@ func instrumentHandler(reg prometheus.Registerer, handlerName string, handler ht
 }
 
 func (s *Server) watchPods() {
-	watchList := cache.NewListWatchFromClient(
-		s.clientset.CoreV1().RESTClient(),
-		"pods",
-		metav1.NamespaceAll,
-		fields.Everything(),
-	)
-
-	_, controller := cache.NewInformerWithOptions(cache.InformerOptions{
-		ListerWatcher: watchList,
-		ObjectType:    &v1.Pod{},
-		Handler: cache.ResourceEventHandlerFuncs{
-			AddFunc:    s.onPodAdd,
-			UpdateFunc: s.onPodUpdate,
-			DeleteFunc: s.onPodDelete,
-		},
-	})
-
-	controller.Run(make(chan struct{}))
-
+	classifierK8s.WatchPods(s.clientset, s.onPodAdd, s.onPodDelete, s.onPodUpdate)
 }
 
 func (s *Server) watchNodes() {
-	watchList := cache.NewListWatchFromClient(
-		s.clientset.CoreV1().RESTClient(),
-		"nodes",
-		metav1.NamespaceAll,
-		fields.Everything(),
-	)
-	_, controller := cache.NewInformerWithOptions(cache.InformerOptions{
-		ListerWatcher: watchList,
-		ObjectType:    &v1.Node{},
-		Handler: cache.ResourceEventHandlerFuncs{
-			AddFunc:    s.onNodeAdd,
-			UpdateFunc: s.onNodeUpdate,
-			DeleteFunc: s.onNodeDelete,
-		},
-	})
-	controller.Run(make(chan struct{}))
-}
-
-// ipToUint32 converts an IPv4 address to a uint32
-func ipToUint32(ip net.IP) uint32 {
-	parts := strings.Split(ip.String(), ".")
-	var result uint32
-	for i, part := range parts {
-		num, err := strconv.Atoi(part)
-		if err != nil {
-			panic(fmt.Sprintf("Error converting IP part to integer: %s", err))
-		}
-		result |= uint32(num) << (24 - 8*i)
-	}
-	return result
+	classifierK8s.WatchNodes(s.clientset, s.onNodeAdd, s.onNodeDelete, s.onNodeUpdate)
 }
 
 func (s *Server) onPodAdd(obj interface{}) {
@@ -189,7 +130,7 @@ func (s *Server) handlePod(obj interface{}) {
 	if pod.Status.HostIP != "" {
 		parsedHostIP := net.ParseIP(pod.Status.HostIP)
 		if parsedHostIP != nil && parsedHostIP.To4() != nil {
-			hostIP = ipToUint32(parsedHostIP)
+			hostIP = network.IpToUint32(parsedHostIP)
 		}
 	}
 
@@ -201,7 +142,7 @@ func (s *Server) handlePod(obj interface{}) {
 			continue
 		}
 
-		ips = append(ips, ipToUint32(ip))
+		ips = append(ips, network.IpToUint32(ip))
 	}
 
 	s.mutex.Lock()
@@ -251,7 +192,7 @@ func (s *Server) onPodDelete(obj interface{}) {
 	if pod.Status.HostIP != "" {
 		parsedHostIP := net.ParseIP(pod.Status.HostIP)
 		if parsedHostIP != nil && parsedHostIP.To4() != nil {
-			hostIP = ipToUint32(parsedHostIP)
+			hostIP = network.IpToUint32(parsedHostIP)
 		}
 	}
 
@@ -391,7 +332,7 @@ func (s *Server) handlePayload(w http.ResponseWriter, r *http.Request) {
 					b1, _ := strconv.Atoi(ipBytes[1])
 					b2, _ := strconv.Atoi(ipBytes[2])
 					b3, _ := strconv.Atoi(ipBytes[3])
-					pod, ok := s.podIpIndex[ipToUint32(net.IPv4(
+					pod, ok := s.podIpIndex[network.IpToUint32(net.IPv4(
 						byte(b0),
 						byte(b1),
 						byte(b2),
@@ -425,7 +366,7 @@ func (s *Server) handlePayload(w http.ResponseWriter, r *http.Request) {
 					b1, _ := strconv.Atoi(ipBytes[1])
 					b2, _ := strconv.Atoi(ipBytes[2])
 					b3, _ := strconv.Atoi(ipBytes[3])
-					pod, ok := s.podIpIndex[ipToUint32(net.IPv4(
+					pod, ok := s.podIpIndex[network.IpToUint32(net.IPv4(
 						byte(b0),
 						byte(b1),
 						byte(b2),
