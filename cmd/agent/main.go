@@ -4,7 +4,7 @@ import (
 	"os"
 	"time"
 
-	"github.com/acll19/netledger/agent"
+	"github.com/acll19/netledger/internal/agent"
 )
 
 func main() {

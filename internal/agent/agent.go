@@ -18,6 +18,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/acll19/netledger/internal/agent/bpf"
 	"github.com/acll19/netledger/internal/byteorder"
 	"github.com/acll19/netledger/internal/cgroup"
 	"github.com/acll19/netledger/internal/payload"
@@ -39,12 +40,12 @@ func Run(flushInterval time.Duration, node, server, serviceCidr string, debug bo
 		return fmt.Errorf("removing memlock: %w", err)
 	}
 
-	spec, err := loadNetledger()
+	spec, err := bpf.LoadNetLedger()
 	if err != nil {
 		return fmt.Errorf("loading netledger: %w", err)
 	}
 
-	var objs netledgerObjects
+	var objs bpf.NetLedgerObjects
 	if err := spec.LoadAndAssign(&objs, nil); err != nil {
 		return fmt.Errorf("load eBPF objects: %w", err)
 	}
@@ -134,8 +135,8 @@ func Run(flushInterval time.Duration, node, server, serviceCidr string, debug bo
 	defer ticker.Stop()
 
 	size := objs.IpMap.MaxEntries()
-	keys := make([]netledgerIpKey, size)
-	values := make([]netledgerIpValue, size)
+	keys := make([]bpf.NetLedgerIpKey, size)
+	values := make([]bpf.NetLedgerIpValue, size)
 	for {
 		select {
 		case <-stop:
@@ -290,7 +291,7 @@ func getPods(informer cache.SharedIndexInformer) []*v1.Pod {
 	return res
 }
 
-func filterSrcOrDstIpOnCurrentHost(keys []netledgerIpKey, values []netledgerIpValue, podsOnHost []*v1.Pod) ([]netledgerIpKey, []netledgerIpValue) {
+func filterSrcOrDstIpOnCurrentHost(keys []bpf.NetLedgerIpKey, values []bpf.NetLedgerIpValue, podsOnHost []*v1.Pod) ([]bpf.NetLedgerIpKey, []bpf.NetLedgerIpValue) {
 	ipsOnHost := make(map[uint32]struct{}, len(podsOnHost)) // pods may have multiple IPs so this is just an approximation
 
 	for _, pod := range podsOnHost {
@@ -305,8 +306,8 @@ func filterSrcOrDstIpOnCurrentHost(keys []netledgerIpKey, values []netledgerIpVa
 		}
 	}
 
-	resKeys := make([]netledgerIpKey, 0, len(keys))
-	resValues := make([]netledgerIpValue, 0, len(values))
+	resKeys := make([]bpf.NetLedgerIpKey, 0, len(keys))
+	resValues := make([]bpf.NetLedgerIpValue, 0, len(values))
 	for i := range keys {
 		if _, found := ipsOnHost[byteorder.Ntohl(keys[i].SrcIp)]; found {
 			resKeys = append(resKeys, keys[i])
