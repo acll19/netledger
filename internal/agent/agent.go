@@ -18,9 +18,9 @@ import (
 	"time"
 
 	"github.com/acll19/netledger/internal/agent/bpf"
+	"github.com/acll19/netledger/internal/agent/cgroup"
 	"github.com/acll19/netledger/internal/agent/kubernetes"
 	"github.com/acll19/netledger/internal/byteorder"
-	"github.com/acll19/netledger/internal/cgroup"
 	"github.com/acll19/netledger/internal/payload"
 	"github.com/cilium/ebpf"
 	"github.com/cilium/ebpf/link"
