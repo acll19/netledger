@@ -8,23 +8,21 @@ import (
 	"k8s.io/client-go/tools/cache"
 )
 
-func WatchPods(client kubernetes.Interface, onPodAdd, onPodDelete func(obj any), onPodUpdate func(oldObj, newObj any)) {
+func WatchNodes(client kubernetes.Interface, onNodeAdd, onNodeDelete func(obj any), onNodeUpdate func(oldObj, newObj any)) {
 	watchList := cache.NewListWatchFromClient(
 		client.CoreV1().RESTClient(),
-		"pods",
+		"nodes",
 		metav1.NamespaceAll,
 		fields.Everything(),
 	)
-
 	_, controller := cache.NewInformerWithOptions(cache.InformerOptions{
 		ListerWatcher: watchList,
-		ObjectType:    &v1.Pod{},
+		ObjectType:    &v1.Node{},
 		Handler: cache.ResourceEventHandlerFuncs{
-			AddFunc:    onPodAdd,
-			UpdateFunc: onPodUpdate,
-			DeleteFunc: onPodDelete,
+			AddFunc:    onNodeAdd,
+			UpdateFunc: onNodeUpdate,
+			DeleteFunc: onNodeDelete,
 		},
 	})
-
 	controller.Run(make(chan struct{}))
 }
