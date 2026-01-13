@@ -12,13 +12,13 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
-	"path/filepath"
 	"strconv"
 	"strings"
 	"syscall"
 	"time"
 
 	"github.com/acll19/netledger/internal/agent/bpf"
+	"github.com/acll19/netledger/internal/agent/kubernetes"
 	"github.com/acll19/netledger/internal/byteorder"
 	"github.com/acll19/netledger/internal/cgroup"
 	"github.com/acll19/netledger/internal/payload"
@@ -26,12 +26,6 @@ import (
 	"github.com/cilium/ebpf/link"
 	"github.com/cilium/ebpf/rlimit"
 	v1 "k8s.io/api/core/v1"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/client-go/informers"
-	"k8s.io/client-go/kubernetes"
-	"k8s.io/client-go/rest"
-	"k8s.io/client-go/tools/cache"
-	"k8s.io/client-go/tools/clientcmd"
 )
 
 func Run(flushInterval time.Duration, node, server, serviceCidr string, debug bool) error {
@@ -122,7 +116,7 @@ func Run(flushInterval time.Duration, node, server, serviceCidr string, debug bo
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	informer, err := setupPodInformer(ctx, node)
+	informer, err := kubernetes.SetupPodInformer(ctx, node)
 	if err != nil {
 		return fmt.Errorf("setting up informer: %w", err)
 	}
@@ -165,7 +159,7 @@ func Run(flushInterval time.Duration, node, server, serviceCidr string, debug bo
 			keys = keys[:n]
 			values = values[:n]
 
-			podsOnHost := getPods(informer)
+			podsOnHost := kubernetes.GetPods(informer)
 			fKeys, fValues := filterSrcOrDstIpOnCurrentHost(keys, values, podsOnHost)
 
 			// debug
@@ -220,75 +214,6 @@ func Run(flushInterval time.Duration, node, server, serviceCidr string, debug bo
 			}
 		}
 	}
-}
-
-func setupPodInformer(ctx context.Context, node string) (cache.SharedIndexInformer, error) {
-	clientset, err := getKubernetesClient()
-	if err != nil {
-		return nil, fmt.Errorf("Error creating Kubernetes client %w", err)
-	}
-
-	log.Println("Watching pods for node: ", node)
-	factory := informers.NewSharedInformerFactoryWithOptions(clientset, 0,
-		informers.WithTweakListOptions(func(options *metav1.ListOptions) {
-			options.FieldSelector = "spec.nodeName=" + node
-		}))
-	informer := factory.Core().V1().Pods().Informer()
-	go informer.Run(ctx.Done())
-
-	// Wait for the initial LIST to populate the cache
-	if !cache.WaitForCacheSync(ctx.Done(), informer.HasSynced) {
-		return nil, fmt.Errorf("timed out waiting for caches to sync")
-	}
-
-	return informer, nil
-}
-
-// getKubernetesClient returns a Kubernetes clientset
-func getKubernetesClient() (*kubernetes.Clientset, error) {
-	var config *rest.Config
-	var err error
-
-	config, err = rest.InClusterConfig()
-	if err == nil {
-		clientset, err := kubernetes.NewForConfig(config)
-		if err != nil {
-			return nil, fmt.Errorf("error creating Kubernetes client (in-cluster): %w", err)
-		}
-		return clientset, nil
-	}
-
-	kubeconfig := os.Getenv("KUBECONFIG")
-	if kubeconfig == "" {
-		home, err := os.UserHomeDir()
-		if err != nil {
-			return nil, errors.New("cannot determine home directory for kubeconfig fallback")
-		}
-		kubeconfig = filepath.Join(home, ".kube", "config")
-	}
-
-	config, err = clientcmd.BuildConfigFromFlags("", kubeconfig)
-	if err != nil {
-		return nil, fmt.Errorf("error creating Kubernetes config from kubeconfig: %w", err)
-	}
-
-	clientset, err := kubernetes.NewForConfig(config)
-	if err != nil {
-		return nil, fmt.Errorf("error creating Kubernetes client: %w", err)
-	}
-
-	return clientset, nil
-}
-
-func getPods(informer cache.SharedIndexInformer) []*v1.Pod {
-	objs := informer.GetStore().List()
-	res := make([]*v1.Pod, 0, len(objs))
-
-	for _, obj := range objs {
-		res = append(res, obj.(*v1.Pod))
-	}
-
-	return res
 }
 
 func filterSrcOrDstIpOnCurrentHost(keys []bpf.NetLedgerIpKey, values []bpf.NetLedgerIpValue, podsOnHost []*v1.Pod) ([]bpf.NetLedgerIpKey, []bpf.NetLedgerIpValue) {
