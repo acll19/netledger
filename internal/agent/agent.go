@@ -12,15 +12,14 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
-	"strconv"
-	"strings"
 	"syscall"
 	"time"
 
 	"github.com/acll19/netledger/internal/agent/bpf"
 	"github.com/acll19/netledger/internal/agent/cgroup"
 	"github.com/acll19/netledger/internal/agent/kubernetes"
-	"github.com/acll19/netledger/internal/byteorder"
+	"github.com/acll19/netledger/internal/network"
+	"github.com/acll19/netledger/internal/network/byteorder"
 	"github.com/acll19/netledger/internal/payload"
 	"github.com/cilium/ebpf"
 	"github.com/cilium/ebpf/link"
@@ -50,8 +49,8 @@ func Run(flushInterval time.Duration, node, server, serviceCidr string, debug bo
 		return fmt.Errorf("Invalid Service CIDR")
 	}
 
-	ipUint := ipToUint32(ip)
-	maskUint := maskToUint32(ipNet.Mask)
+	ipUint := network.InterfacepToUint32(ip)
+	maskUint := network.MaskToUint32(ipNet.Mask)
 
 	if err := spec.Variables["service_subnet_prefix"].Set(byteorder.Htonl(ipUint)); err != nil {
 		return fmt.Errorf("setting service prefix from CIDR: %w", err)
@@ -82,7 +81,7 @@ func Run(flushInterval time.Duration, node, server, serviceCidr string, debug bo
 	}
 	activeLinks = append(activeLinks, cgroupIngressLink)
 
-	ifaces, err := ListCiliumVeths()
+	ifaces, err := network.ListCiliumVeths()
 	if err != nil {
 		return fmt.Errorf("failed to list cilium veths: %w", err)
 	}
@@ -227,7 +226,7 @@ func filterSrcOrDstIpOnCurrentHost(keys []bpf.NetLedgerIpKey, values []bpf.NetLe
 				continue
 			}
 
-			ipsOnHost[ipToUint32(ip)] = struct{}{}
+			ipsOnHost[network.InterfacepToUint32(ip)] = struct{}{}
 		}
 	}
 
@@ -246,46 +245,6 @@ func filterSrcOrDstIpOnCurrentHost(keys []bpf.NetLedgerIpKey, values []bpf.NetLe
 	}
 
 	return resKeys, resValues
-}
-
-// ListCiliumVeths returns all network interfaces whose name starts with "lxc".
-func ListCiliumVeths() ([]net.Interface, error) {
-	ifaces, err := net.Interfaces()
-	if err != nil {
-		return nil, fmt.Errorf("failed to list interfaces: %w", err)
-	}
-
-	var ciliumIfaces []net.Interface
-	for _, iface := range ifaces {
-		if strings.HasPrefix(iface.Name, "lxc") {
-			ciliumIfaces = append(ciliumIfaces, iface)
-		}
-	}
-
-	return ciliumIfaces, nil
-}
-
-// ipToUint32 converts an IPv4 address to a uint32
-func ipToUint32(ip net.IP) uint32 {
-	parts := strings.Split(ip.String(), ".")
-	var result uint32
-	for i, part := range parts {
-		num, err := strconv.Atoi(part)
-		if err != nil {
-			log.Fatalf("Error converting IP part to integer: %s", err)
-		}
-		result |= uint32(num) << (24 - 8*i)
-	}
-	return result
-}
-
-// maskToUint32 converts a net.IPMask to a uint32
-func maskToUint32(mask net.IPMask) uint32 {
-	var result uint32
-	for _, byteValue := range mask {
-		result = (result << 8) | uint32(byteValue)
-	}
-	return result
 }
 
 func sendDataToServer(ctx context.Context, server string, flowEntries []payload.FlowEntry) error {
