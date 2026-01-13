@@ -2,23 +2,18 @@ package kubernetes
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"log"
-	"os"
-	"path/filepath"
 
+	"github.com/acll19/netledger/internal/kubernetes"
 	v1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/informers"
-	"k8s.io/client-go/kubernetes"
-	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/cache"
-	"k8s.io/client-go/tools/clientcmd"
 )
 
 func SetupPodInformer(ctx context.Context, node string) (cache.SharedIndexInformer, error) {
-	clientset, err := getKubernetesClient()
+	clientset, err := kubernetes.GetKubernetesClient()
 	if err != nil {
 		return nil, fmt.Errorf("Error creating Kubernetes client %w", err)
 	}
@@ -37,42 +32,6 @@ func SetupPodInformer(ctx context.Context, node string) (cache.SharedIndexInform
 	}
 
 	return informer, nil
-}
-
-// getKubernetesClient returns a Kubernetes clientset
-func getKubernetesClient() (*kubernetes.Clientset, error) {
-	var config *rest.Config
-	var err error
-
-	config, err = rest.InClusterConfig()
-	if err == nil {
-		clientset, err := kubernetes.NewForConfig(config)
-		if err != nil {
-			return nil, fmt.Errorf("error creating Kubernetes client (in-cluster): %w", err)
-		}
-		return clientset, nil
-	}
-
-	kubeconfig := os.Getenv("KUBECONFIG")
-	if kubeconfig == "" {
-		home, err := os.UserHomeDir()
-		if err != nil {
-			return nil, errors.New("cannot determine home directory for kubeconfig fallback")
-		}
-		kubeconfig = filepath.Join(home, ".kube", "config")
-	}
-
-	config, err = clientcmd.BuildConfigFromFlags("", kubeconfig)
-	if err != nil {
-		return nil, fmt.Errorf("error creating Kubernetes config from kubeconfig: %w", err)
-	}
-
-	clientset, err := kubernetes.NewForConfig(config)
-	if err != nil {
-		return nil, fmt.Errorf("error creating Kubernetes client: %w", err)
-	}
-
-	return clientset, nil
 }
 
 func GetPods(informer cache.SharedIndexInformer) []*v1.Pod {
