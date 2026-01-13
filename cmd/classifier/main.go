@@ -16,7 +16,6 @@ import (
 	"net/http"
 	"net/netip"
 	"strconv"
-	"strings"
 	"sync"
 
 	classifierK8s "github.com/acll19/netledger/internal/classifier/kubernetes"
@@ -327,17 +326,14 @@ func (s *Server) handlePayload(w http.ResponseWriter, r *http.Request) {
 						name:      podMeta.name,
 					}
 				} else {
-					ipBytes := strings.Split(srcIp, ".")
-					b0, _ := strconv.Atoi(ipBytes[0])
-					b1, _ := strconv.Atoi(ipBytes[1])
-					b2, _ := strconv.Atoi(ipBytes[2])
-					b3, _ := strconv.Atoi(ipBytes[3])
-					pod, ok := s.podIpIndex[network.IpToUint32(net.IPv4(
-						byte(b0),
-						byte(b1),
-						byte(b2),
-						byte(b3),
-					))]
+					parsedIP, err := network.StringIpToNetIp(srcIp)
+					if err != nil {
+						continue
+					}
+					pod, ok := s.podIpIndex[network.IpToUint32(parsedIP)]
+					if !ok {
+						continue
+					}
 					if !ok {
 						continue
 					}
@@ -361,17 +357,11 @@ func (s *Server) handlePayload(w http.ResponseWriter, r *http.Request) {
 						name:      podMeta.name,
 					}
 				} else {
-					ipBytes := strings.Split(dstIp, ".")
-					b0, _ := strconv.Atoi(ipBytes[0])
-					b1, _ := strconv.Atoi(ipBytes[1])
-					b2, _ := strconv.Atoi(ipBytes[2])
-					b3, _ := strconv.Atoi(ipBytes[3])
-					pod, ok := s.podIpIndex[network.IpToUint32(net.IPv4(
-						byte(b0),
-						byte(b1),
-						byte(b2),
-						byte(b3),
-					))]
+					parsedIP, err := network.StringIpToNetIp(dstIp)
+					if err != nil {
+						continue
+					}
+					pod, ok := s.podIpIndex[network.IpToUint32(parsedIP)]
 					if !ok {
 						continue
 					}

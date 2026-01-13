@@ -47,3 +47,11 @@ func ListCiliumVeths() ([]net.Interface, error) {
 
 	return ciliumIfaces, nil
 }
+
+func StringIpToNetIp(ip string) (net.IP, error) {
+	parsedIP := net.ParseIP(ip)
+	if parsedIP == nil {
+		return nil, fmt.Errorf("invalid IP address: %s", ip)
+	}
+	return parsedIP, nil
+}
