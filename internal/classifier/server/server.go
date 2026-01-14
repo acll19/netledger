@@ -31,14 +31,27 @@ type NodeInfo struct {
 }
 
 type Server struct {
-	Clientset     *kubernetes.Clientset
-	PodIpIndex    map[uint32]statistics.PodKey // maps Pod IPv4s to Pod name
-	NodeIpIndex   map[uint32]string            // maps Node IPv4s to Node name (for hostNetwork pods)
-	PodIndex      map[statistics.PodKey]PodInfo
-	NodeIndex     map[string]string // maps node name to Node zone
-	IngStatistics statistics.StatisticMap
-	EgStatistics  statistics.StatisticMap
+	clientset     *kubernetes.Clientset
+	podIpIndex    map[uint32]statistics.PodKey // maps Pod IPv4s to Pod name
+	nodeIpIndex   map[uint32]string            // maps Node IPv4s to Node name (for hostNetwork pods)
+	podIndex      map[statistics.PodKey]PodInfo
+	nodeIndex     map[string]string // maps node name to Node zone
+	ingStatistics statistics.StatisticMap
+	egStatistics  statistics.StatisticMap
 	mutex         sync.RWMutex
+}
+
+func NewServer(clientset *kubernetes.Clientset) *Server {
+	server := &Server{
+		clientset:     clientset,
+		podIpIndex:    map[uint32]statistics.PodKey{},
+		nodeIpIndex:   map[uint32]string{},
+		podIndex:      map[statistics.PodKey]PodInfo{},
+		nodeIndex:     map[string]string{},
+		ingStatistics: statistics.StatisticMap{},
+		egStatistics:  statistics.StatisticMap{},
+	}
+	return server
 }
 
 func (s *Server) Start(reg *prometheus.Registry) {
@@ -51,11 +64,11 @@ func (s *Server) Start(reg *prometheus.Registry) {
 }
 
 func (s *Server) WatchPods() {
-	classifierK8s.WatchPods(s.Clientset, s.onPodAdd, s.onPodDelete, s.onPodUpdate)
+	classifierK8s.WatchPods(s.clientset, s.onPodAdd, s.onPodDelete, s.onPodUpdate)
 }
 
 func (s *Server) WatchNodes() {
-	classifierK8s.WatchNodes(s.Clientset, s.onNodeAdd, s.onNodeDelete, s.onNodeUpdate)
+	classifierK8s.WatchNodes(s.clientset, s.onNodeAdd, s.onNodeDelete, s.onNodeUpdate)
 }
 
 func (s *Server) onPodAdd(obj interface{}) {
@@ -89,7 +102,7 @@ func (s *Server) handlePod(obj interface{}) {
 	}
 
 	s.mutex.Lock()
-	s.PodIndex[statistics.PodKey{
+	s.podIndex[statistics.PodKey{
 		Namespace: pod.Namespace,
 		Name:      pod.Name,
 	}] = PodInfo{
@@ -100,9 +113,9 @@ func (s *Server) handlePod(obj interface{}) {
 		// If the pod IP matches the host IP, it's using hostNetwork
 		// In this case, use the node as the key instead of the pod
 		if hostIP != 0 && ip == hostIP {
-			s.NodeIpIndex[ip] = pod.Spec.NodeName
+			s.nodeIpIndex[ip] = pod.Spec.NodeName
 		} else {
-			s.PodIpIndex[ip] = statistics.PodKey{
+			s.podIpIndex[ip] = statistics.PodKey{
 				Namespace: pod.Namespace,
 				Name:      pod.Name,
 			}
@@ -135,16 +148,16 @@ func (s *Server) onPodDelete(obj interface{}) {
 	}
 
 	s.mutex.Lock()
-	info, found := s.PodIndex[k]
+	info, found := s.podIndex[k]
 	if found {
 		for _, ip := range info.IPs {
 			// Only delete from podIpIndex if it's not a host IP
 			// Host IPs are in NodeIpIndex and shared across hostNetwork pods
 			if hostIP == 0 || ip != hostIP {
-				delete(s.PodIpIndex, ip)
+				delete(s.podIpIndex, ip)
 			}
 		}
-		delete(s.PodIndex, k)
+		delete(s.podIndex, k)
 	}
 
 	// TODO: must delete from statistics (ing and eg)
@@ -161,7 +174,7 @@ func (s *Server) onNodeAdd(obj interface{}) {
 		zone = "unknown"
 	}
 	s.mutex.Lock()
-	s.NodeIndex[node.Name] = zone
+	s.nodeIndex[node.Name] = zone
 	s.mutex.Unlock()
 }
 
@@ -175,7 +188,7 @@ func (s *Server) onNodeUpdate(oldObj, newObj interface{}) {
 		zone = "unknown"
 	}
 	s.mutex.Lock()
-	s.NodeIndex[node.Name] = zone
+	s.nodeIndex[node.Name] = zone
 	s.mutex.Unlock()
 }
 
@@ -188,12 +201,12 @@ func (s *Server) onNodeDelete(obj interface{}) {
 	// Get node's IP addresses and remove them from NodeIpIndex
 	s.mutex.Lock()
 	// Clean up any node IPs associated with this node
-	for ip, nodeName := range s.NodeIpIndex {
+	for ip, nodeName := range s.nodeIpIndex {
 		if nodeName == node.Name {
-			delete(s.NodeIpIndex, ip)
+			delete(s.nodeIpIndex, ip)
 		}
 	}
-	delete(s.NodeIndex, node.Name)
+	delete(s.nodeIndex, node.Name)
 	s.mutex.Unlock()
 	log.Printf("Node deleted: %s", node.Name)
 }
@@ -260,7 +273,7 @@ func (s *Server) handlePayload(w http.ResponseWriter, r *http.Request) {
 					if err != nil {
 						continue
 					}
-					pod, ok := s.PodIpIndex[network.IpToUint32(parsedIP)]
+					pod, ok := s.podIpIndex[network.IpToUint32(parsedIP)]
 					if !ok {
 						continue
 					}
@@ -291,7 +304,7 @@ func (s *Server) handlePayload(w http.ResponseWriter, r *http.Request) {
 					if err != nil {
 						continue
 					}
-					pod, ok := s.PodIpIndex[network.IpToUint32(parsedIP)]
+					pod, ok := s.podIpIndex[network.IpToUint32(parsedIP)]
 					if !ok {
 						continue
 					}
@@ -300,13 +313,13 @@ func (s *Server) handlePayload(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 
-		sp := s.PodIndex[srcPod]
+		sp := s.podIndex[srcPod]
 		srcNode := sp.Node
-		srcZone = s.NodeIndex[srcNode]
+		srcZone = s.nodeIndex[srcNode]
 
-		dp := s.PodIndex[dstPod]
+		dp := s.podIndex[dstPod]
 		dstNode := dp.Node
-		dstZone = s.NodeIndex[dstNode]
+		dstZone = s.nodeIndex[dstNode]
 
 		srcParsed, err := netip.ParseAddr(srcIp)
 		if err != nil {
@@ -341,21 +354,21 @@ func (s *Server) handlePayload(w http.ResponseWriter, r *http.Request) {
 			flowKey.PodName = dstPod.Name
 			flowKey.Namespace = dstPod.Namespace
 
-			if fs, found := s.IngStatistics[flowKey]; found {
+			if fs, found := s.ingStatistics[flowKey]; found {
 				fs.Traffic += currentFlowSize.Traffic
-				s.IngStatistics[flowKey] = fs
+				s.ingStatistics[flowKey] = fs
 			} else {
-				s.IngStatistics[flowKey] = currentFlowSize
+				s.ingStatistics[flowKey] = currentFlowSize
 			}
 		} else {
 			flowKey.PodName = srcPod.Name
 			flowKey.Namespace = srcPod.Namespace
 
-			if fs, found := s.EgStatistics[flowKey]; found {
+			if fs, found := s.egStatistics[flowKey]; found {
 				fs.Traffic += currentFlowSize.Traffic
-				s.EgStatistics[flowKey] = fs
+				s.egStatistics[flowKey] = fs
 			} else {
-				s.EgStatistics[flowKey] = currentFlowSize
+				s.egStatistics[flowKey] = currentFlowSize
 			}
 		}
 
@@ -392,7 +405,7 @@ func (s *Server) Collect(ch chan<- prometheus.Metric) {
 	s.mutex.Lock()
 	defer s.mutex.Unlock()
 
-	for fk, s := range s.IngStatistics {
+	for fk, s := range s.ingStatistics {
 		ch <- prometheus.MustNewConstMetric(
 			statistics.IngressDesc,
 			prometheus.CounterValue,
@@ -405,7 +418,7 @@ func (s *Server) Collect(ch chan<- prometheus.Metric) {
 		)
 	}
 
-	for fk, s := range s.EgStatistics {
+	for fk, s := range s.egStatistics {
 		ch <- prometheus.MustNewConstMetric(
 			statistics.EgressDesc,
 			prometheus.CounterValue,

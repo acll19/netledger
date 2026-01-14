@@ -12,7 +12,6 @@ import (
 	"log"
 
 	"github.com/acll19/netledger/internal/classifier/server"
-	"github.com/acll19/netledger/internal/classifier/statistics"
 	k8s "github.com/acll19/netledger/internal/kubernetes"
 	"github.com/prometheus/client_golang/prometheus"
 )
@@ -23,15 +22,7 @@ func main() {
 		log.Fatalf("Error creating kubernetes client: %v", err)
 	}
 
-	server := &server.Server{
-		Clientset:     clientset,
-		PodIpIndex:    map[uint32]statistics.PodKey{},
-		NodeIpIndex:   map[uint32]string{},
-		PodIndex:      map[statistics.PodKey]server.PodInfo{},
-		NodeIndex:     map[string]string{},
-		IngStatistics: statistics.StatisticMap{},
-		EgStatistics:  statistics.StatisticMap{},
-	}
+	server := server.NewServer(clientset)
 
 	// Start watching Pods and Nodes
 	go server.WatchPods()
