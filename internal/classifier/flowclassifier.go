@@ -1,4 +1,4 @@
-package server
+package classifier
 
 import (
 	"fmt"
@@ -10,14 +10,33 @@ import (
 	"github.com/acll19/netledger/internal/payload"
 )
 
-func classifyFlows(data []payload.FlowEntry,
+type PodInfo struct {
+	Node string
+	IPs  []uint32
+}
+
+type NodeInfo struct {
+	Zone string
+}
+
+type FlowLog struct {
+	Src     string
+	SrcIp   netip.Addr
+	SrcPort int
+	Dst     string
+	DstIP   netip.Addr
+	DstPort int
+	Bytes   int
+}
+
+func Classify(data []payload.FlowEntry,
 	podIndex map[statistics.PodKey]PodInfo,
 	podIpIndex map[uint32]statistics.PodKey,
 	nodeIndex map[string]string,
 	ingStatistics statistics.StatisticMap,
 	egStatistics statistics.StatisticMap,
-) []flowLog {
-	flowLogs := make([]flowLog, 0, len(data))
+) []FlowLog {
+	FlowLogs := make([]FlowLog, 0, len(data))
 	processedIngressPods := make(map[string]statistics.PodKey)
 	processedEgressPods := make(map[string]statistics.PodKey)
 	for _, entry := range data {
@@ -105,14 +124,14 @@ func classifyFlows(data []payload.FlowEntry,
 			log.Printf("Failed to parse dst IP: %v", err)
 		}
 
-		flowLogs = append(flowLogs, flowLog{
-			src:     fmt.Sprintf("%s/%s", srcPod.Namespace, srcPod.Name),
-			srcIp:   srcParsed,
-			srcPort: int(entry.SrcPort),
-			dst:     fmt.Sprintf("%s/%s", dstPod.Namespace, dstPod.Name),
-			dstIP:   dstParsed,
-			dstPort: int(entry.DstPort),
-			bytes:   int(entry.Traffic),
+		FlowLogs = append(FlowLogs, FlowLog{
+			Src:     fmt.Sprintf("%s/%s", srcPod.Namespace, srcPod.Name),
+			SrcIp:   srcParsed,
+			SrcPort: int(entry.SrcPort),
+			Dst:     fmt.Sprintf("%s/%s", dstPod.Namespace, dstPod.Name),
+			DstIP:   dstParsed,
+			DstPort: int(entry.DstPort),
+			Bytes:   int(entry.Traffic),
 		})
 
 		currentFlowSize := statistics.FlowSize{
@@ -148,5 +167,5 @@ func classifyFlows(data []payload.FlowEntry,
 		}
 
 	}
-	return flowLogs
+	return FlowLogs
 }

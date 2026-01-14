@@ -6,10 +6,10 @@ import (
 	"log"
 	"net"
 	"net/http"
-	"net/netip"
 	"strconv"
 	"sync"
 
+	"github.com/acll19/netledger/internal/classifier"
 	"github.com/acll19/netledger/internal/classifier/statistics"
 	"github.com/acll19/netledger/internal/network"
 	"github.com/acll19/netledger/internal/payload"
@@ -21,20 +21,11 @@ import (
 	classifierK8s "github.com/acll19/netledger/internal/classifier/kubernetes"
 )
 
-type PodInfo struct {
-	Node string
-	IPs  []uint32
-}
-
-type NodeInfo struct {
-	Zone string
-}
-
 type Server struct {
 	clientset     *kubernetes.Clientset
 	podIpIndex    map[uint32]statistics.PodKey // maps Pod IPv4s to Pod name
 	nodeIpIndex   map[uint32]string            // maps Node IPv4s to Node name (for hostNetwork pods)
-	podIndex      map[statistics.PodKey]PodInfo
+	podIndex      map[statistics.PodKey]classifier.PodInfo
 	nodeIndex     map[string]string // maps node name to Node zone
 	ingStatistics statistics.StatisticMap
 	egStatistics  statistics.StatisticMap
@@ -46,7 +37,7 @@ func NewServer(clientset *kubernetes.Clientset) *Server {
 		clientset:     clientset,
 		podIpIndex:    map[uint32]statistics.PodKey{},
 		nodeIpIndex:   map[uint32]string{},
-		podIndex:      map[statistics.PodKey]PodInfo{},
+		podIndex:      map[statistics.PodKey]classifier.PodInfo{},
 		nodeIndex:     map[string]string{},
 		ingStatistics: statistics.StatisticMap{},
 		egStatistics:  statistics.StatisticMap{},
@@ -105,7 +96,7 @@ func (s *Server) handlePod(obj any) {
 	s.podIndex[statistics.PodKey{
 		Namespace: pod.Namespace,
 		Name:      pod.Name,
-	}] = PodInfo{
+	}] = classifier.PodInfo{
 		Node: pod.Spec.NodeName,
 		IPs:  ips,
 	}
@@ -211,16 +202,6 @@ func (s *Server) onNodeDelete(obj any) {
 	log.Printf("Node deleted: %s", node.Name)
 }
 
-type flowLog struct {
-	src     string
-	srcIp   netip.Addr
-	srcPort int
-	dst     string
-	dstIP   netip.Addr
-	dstPort int
-	bytes   int
-}
-
 func (s *Server) handlePayload(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "Invalid request method", http.StatusMethodNotAllowed)
@@ -240,7 +221,7 @@ func (s *Server) handlePayload(w http.ResponseWriter, r *http.Request) {
 	}
 
 	s.mutex.Lock()
-	flowLogs := classifyFlows(
+	flowLogs := classifier.Classify(
 		data,
 		s.podIndex,
 		s.podIpIndex,
@@ -250,21 +231,21 @@ func (s *Server) handlePayload(w http.ResponseWriter, r *http.Request) {
 	s.mutex.Unlock()
 
 	for _, flowLog := range flowLogs {
-		log.Println(flowLog.src,
+		log.Println(flowLog.Src,
 			"(",
-			flowLog.srcIp,
+			flowLog.SrcIp,
 			")",
 			"from port",
-			flowLog.srcPort,
+			flowLog.SrcPort,
 			"to",
-			flowLog.dst,
+			flowLog.Dst,
 			"(",
-			flowLog.dstIP,
+			flowLog.DstIP,
 			")",
 			"at port",
-			flowLog.dstPort,
+			flowLog.DstPort,
 			"with",
-			strconv.Itoa(flowLog.bytes),
+			strconv.Itoa(flowLog.Bytes),
 			"bytes")
 	}
 }
