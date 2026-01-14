@@ -71,11 +71,11 @@ func (s *Server) WatchNodes() {
 	classifierK8s.WatchNodes(s.clientset, s.onNodeAdd, s.onNodeDelete, s.onNodeUpdate)
 }
 
-func (s *Server) onPodAdd(obj interface{}) {
+func (s *Server) onPodAdd(obj any) {
 	s.handlePod(obj)
 }
 
-func (s *Server) handlePod(obj interface{}) {
+func (s *Server) handlePod(obj any) {
 	pod, ok := obj.(*v1.Pod)
 	if !ok {
 		return
@@ -124,11 +124,11 @@ func (s *Server) handlePod(obj interface{}) {
 	s.mutex.Unlock()
 }
 
-func (s *Server) onPodUpdate(oldObj, newObj interface{}) {
+func (s *Server) onPodUpdate(oldObj, newObj any) {
 	s.handlePod(newObj)
 }
 
-func (s *Server) onPodDelete(obj interface{}) {
+func (s *Server) onPodDelete(obj any) {
 	pod, ok := obj.(*v1.Pod)
 	if !ok {
 		return
@@ -164,7 +164,7 @@ func (s *Server) onPodDelete(obj interface{}) {
 	s.mutex.Unlock()
 }
 
-func (s *Server) onNodeAdd(obj interface{}) {
+func (s *Server) onNodeAdd(obj any) {
 	node, ok := obj.(*v1.Node)
 	if !ok {
 		return
@@ -178,7 +178,7 @@ func (s *Server) onNodeAdd(obj interface{}) {
 	s.mutex.Unlock()
 }
 
-func (s *Server) onNodeUpdate(oldObj, newObj interface{}) {
+func (s *Server) onNodeUpdate(oldObj, newObj any) {
 	node, ok := newObj.(*v1.Node)
 	if !ok {
 		return
@@ -192,7 +192,7 @@ func (s *Server) onNodeUpdate(oldObj, newObj interface{}) {
 	s.mutex.Unlock()
 }
 
-func (s *Server) onNodeDelete(obj interface{}) {
+func (s *Server) onNodeDelete(obj any) {
 	node, ok := obj.(*v1.Node)
 	if !ok {
 		return
@@ -239,141 +239,14 @@ func (s *Server) handlePayload(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	flowLogs := make([]flowLog, 0, len(data))
-
 	s.mutex.Lock()
-
-	processedIngressPods := make(map[string]statistics.PodKey)
-	processedEgressPods := make(map[string]statistics.PodKey)
-	for _, entry := range data {
-		var srcPod, dstPod statistics.PodKey
-		srcIp := entry.SrcIP
-		dstIp := entry.DstIP
-		var srcZone, dstZone string // TODO src & dst regions too
-
-		switch entry.Direction {
-		case "egress":
-			if entry.PodName != "unknown" {
-				processedEgressPods[srcIp] = statistics.PodKey{
-					Namespace: entry.PodNamespace,
-					Name:      entry.PodName,
-				}
-				srcPod = statistics.PodKey{
-					Namespace: entry.PodNamespace,
-					Name:      entry.PodName,
-				}
-			} else {
-				if podMeta, ok := processedEgressPods[srcIp]; ok {
-					srcPod = statistics.PodKey{
-						Namespace: podMeta.Namespace,
-						Name:      podMeta.Name,
-					}
-				} else {
-					parsedIP, err := network.StringIpToNetIp(srcIp)
-					if err != nil {
-						continue
-					}
-					pod, ok := s.podIpIndex[network.IpToUint32(parsedIP)]
-					if !ok {
-						continue
-					}
-					if !ok {
-						continue
-					}
-					srcPod = pod
-				}
-			}
-		case "ingress":
-			if entry.PodName != "unknown" {
-				processedIngressPods[dstIp] = statistics.PodKey{
-					Namespace: entry.PodNamespace,
-					Name:      entry.PodName,
-				}
-				dstPod = statistics.PodKey{
-					Namespace: entry.PodNamespace,
-					Name:      entry.PodName,
-				}
-			} else {
-				if podMeta, ok := processedIngressPods[dstIp]; ok {
-					dstPod = statistics.PodKey{
-						Namespace: podMeta.Namespace,
-						Name:      podMeta.Name,
-					}
-				} else {
-					parsedIP, err := network.StringIpToNetIp(dstIp)
-					if err != nil {
-						continue
-					}
-					pod, ok := s.podIpIndex[network.IpToUint32(parsedIP)]
-					if !ok {
-						continue
-					}
-					dstPod = pod
-				}
-			}
-		}
-
-		sp := s.podIndex[srcPod]
-		srcNode := sp.Node
-		srcZone = s.nodeIndex[srcNode]
-
-		dp := s.podIndex[dstPod]
-		dstNode := dp.Node
-		dstZone = s.nodeIndex[dstNode]
-
-		srcParsed, err := netip.ParseAddr(srcIp)
-		if err != nil {
-			log.Printf("Failed to parse src IP: %v", err)
-		}
-		dstParsed, err := netip.ParseAddr(dstIp)
-		if err != nil {
-			log.Printf("Failed to parse dst IP: %v", err)
-		}
-
-		flowLogs = append(flowLogs, flowLog{
-			src:     fmt.Sprintf("%s/%s", srcPod.Namespace, srcPod.Name),
-			srcIp:   srcParsed,
-			srcPort: int(entry.SrcPort),
-			dst:     fmt.Sprintf("%s/%s", dstPod.Namespace, dstPod.Name),
-			dstIP:   dstParsed,
-			dstPort: int(entry.DstPort),
-			bytes:   int(entry.Traffic),
-		})
-
-		currentFlowSize := statistics.FlowSize{
-			Traffic: entry.Traffic,
-		}
-
-		flowKey := statistics.FlowKey{
-			Internet:   network.IsInternetIP(srcParsed) || network.IsInternetIP(dstParsed),
-			SameZone:   srcZone == dstZone,
-			SameRegion: false, // TODO implement
-		}
-
-		if entry.Direction == "ingress" {
-			flowKey.PodName = dstPod.Name
-			flowKey.Namespace = dstPod.Namespace
-
-			if fs, found := s.ingStatistics[flowKey]; found {
-				fs.Traffic += currentFlowSize.Traffic
-				s.ingStatistics[flowKey] = fs
-			} else {
-				s.ingStatistics[flowKey] = currentFlowSize
-			}
-		} else {
-			flowKey.PodName = srcPod.Name
-			flowKey.Namespace = srcPod.Namespace
-
-			if fs, found := s.egStatistics[flowKey]; found {
-				fs.Traffic += currentFlowSize.Traffic
-				s.egStatistics[flowKey] = fs
-			} else {
-				s.egStatistics[flowKey] = currentFlowSize
-			}
-		}
-
-	}
-
+	flowLogs := classifyFlows(
+		data,
+		s.podIndex,
+		s.podIpIndex,
+		s.nodeIndex,
+		s.ingStatistics,
+		s.egStatistics)
 	s.mutex.Unlock()
 
 	for _, flowLog := range flowLogs {
