@@ -8,6 +8,7 @@ import (
 	"io"
 	"log"
 	"log/slog"
+	"maps"
 	"net"
 	"net/http"
 	"os"
@@ -60,56 +61,49 @@ func Run(flushInterval time.Duration, node, server, serviceCidr string, debug bo
 		return fmt.Errorf("setting service mask from CIDR: %w", err)
 	}
 
-	var activeLinks []link.Link
-	cgroupEgressLink, err := link.AttachCgroup(link.CgroupOptions{
-		Path:    "/sys/fs/cgroup",
-		Attach:  ebpf.AttachCGroupInetEgress,
-		Program: objs.EgressConnectionTracker,
-	})
+	activeLinks := make([]link.Link, 0)
+	cgroupEgressLink, err := bpf.AttachRootCgroup(objs.EgressConnectionTracker)
 	if err != nil {
 		return fmt.Errorf("attach cgroup skb: %w", err)
 	}
 	activeLinks = append(activeLinks, cgroupEgressLink)
 
-	cgroupIngressLink, err := link.AttachCgroup(link.CgroupOptions{
-		Path:    "/sys/fs/cgroup",
-		Attach:  ebpf.AttachCGroupInetIngress,
-		Program: objs.IngressConnectionTracker,
-	})
+	cgroupIngressLink, err := bpf.AttachRootCgroup(objs.IngressConnectionTracker)
 	if err != nil {
 		return fmt.Errorf("attach cgroup skb: %w", err)
 	}
-	activeLinks = append(activeLinks, cgroupIngressLink)
 
 	ifaces, err := network.ListCiliumVeths()
 	if err != nil {
 		return fmt.Errorf("failed to list cilium veths: %w", err)
 	}
+	activeLinks = append(activeLinks, cgroupIngressLink)
 
-	for _, iface := range ifaces {
-		// TODO when pods die, its link needs to be closed
-		// TODO avoid attaching the same veth twice
-		fmt.Println(iface.Name)
-		link, err := link.AttachTCX(link.TCXOptions{
-			Interface: iface.Index,
-			Program:   objs.EgressTcxConnectionTracker,
-			Attach:    ebpf.AttachType(ebpf.AttachTCXEgress),
-		})
-		if err != nil {
-			return fmt.Errorf("attach tcx program to interface %s: %w", iface.Name, err)
-		}
-
-		activeLinks = append(activeLinks, link)
+	ifacesMap := make(map[int]net.Interface)
+	al, m, err := bpf.AttachTcxToCiliumHostVeth(
+		ifaces,
+		objs.EgressTcxConnectionTracker,
+		ebpf.AttachType(ebpf.AttachTCXEgress),
+	)
+	if err != nil {
+		return fmt.Errorf("attach tcx program to interface: %w", err)
 	}
-
+	activeLinks = append(activeLinks, al...)
+	maps.Copy(ifacesMap, m)
 	log.Println("Number of active links: ", len(activeLinks))
+
+	done, err := bpf.SubscribeToLinkUpdates(ifacesMap, activeLinks, objs.IngressConnectionTracker, ebpf.AttachType(ebpf.AttachTCXEgress))
+	if err != nil {
+		return fmt.Errorf("subscribe to link updates: %w", err)
+	}
 
 	defer func() {
 		for _, link := range activeLinks {
 			if err := link.Close(); err != nil {
-				slog.Error("error closing link object:", err)
+				slog.Error("error closing link object", "message: ", err.Error())
 			}
 		}
+		close(done)
 	}()
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -117,7 +111,7 @@ func Run(flushInterval time.Duration, node, server, serviceCidr string, debug bo
 
 	informer, err := kubernetes.SetupPodInformer(ctx, node)
 	if err != nil {
-		return fmt.Errorf("setting up informer: %w", err)
+		return fmt.Errorf("error setting up informer: %w", err)
 	}
 
 	// Channel to listen to interrupt signals
