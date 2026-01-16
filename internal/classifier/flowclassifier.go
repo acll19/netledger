@@ -5,7 +5,7 @@ import (
 	"log"
 	"net/netip"
 
-	"github.com/acll19/netledger/internal/classifier/statistics"
+	"github.com/acll19/netledger/internal/classifier/metrics"
 	"github.com/acll19/netledger/internal/network"
 	"github.com/acll19/netledger/internal/payload"
 )
@@ -30,17 +30,17 @@ type FlowLog struct {
 }
 
 func Classify(data []payload.FlowEntry,
-	podIndex map[statistics.PodKey]PodInfo,
-	podIpIndex map[uint32]statistics.PodKey,
+	podIndex map[metrics.PodKey]PodInfo,
+	podIpIndex map[uint32]metrics.PodKey,
 	nodeIndex map[string]string,
-	ingStatistics statistics.StatisticMap,
-	egStatistics statistics.StatisticMap,
+	ingStatistics metrics.StatisticMap,
+	egStatistics metrics.StatisticMap,
 ) []FlowLog {
 	FlowLogs := make([]FlowLog, 0, len(data))
-	processedIngressPods := make(map[string]statistics.PodKey)
-	processedEgressPods := make(map[string]statistics.PodKey)
+	processedIngressPods := make(map[string]metrics.PodKey)
+	processedEgressPods := make(map[string]metrics.PodKey)
 	for _, entry := range data {
-		var srcPod, dstPod statistics.PodKey
+		var srcPod, dstPod metrics.PodKey
 		srcIp := entry.SrcIP
 		dstIp := entry.DstIP
 		var srcZone, dstZone string // TODO src & dst regions too
@@ -48,17 +48,17 @@ func Classify(data []payload.FlowEntry,
 		switch entry.Direction {
 		case "egress":
 			if entry.PodName != "unknown" {
-				processedEgressPods[srcIp] = statistics.PodKey{
+				processedEgressPods[srcIp] = metrics.PodKey{
 					Namespace: entry.PodNamespace,
 					Name:      entry.PodName,
 				}
-				srcPod = statistics.PodKey{
+				srcPod = metrics.PodKey{
 					Namespace: entry.PodNamespace,
 					Name:      entry.PodName,
 				}
 			} else {
 				if podMeta, ok := processedEgressPods[srcIp]; ok {
-					srcPod = statistics.PodKey{
+					srcPod = metrics.PodKey{
 						Namespace: podMeta.Namespace,
 						Name:      podMeta.Name,
 					}
@@ -79,17 +79,17 @@ func Classify(data []payload.FlowEntry,
 			}
 		case "ingress":
 			if entry.PodName != "unknown" {
-				processedIngressPods[dstIp] = statistics.PodKey{
+				processedIngressPods[dstIp] = metrics.PodKey{
 					Namespace: entry.PodNamespace,
 					Name:      entry.PodName,
 				}
-				dstPod = statistics.PodKey{
+				dstPod = metrics.PodKey{
 					Namespace: entry.PodNamespace,
 					Name:      entry.PodName,
 				}
 			} else {
 				if podMeta, ok := processedIngressPods[dstIp]; ok {
-					dstPod = statistics.PodKey{
+					dstPod = metrics.PodKey{
 						Namespace: podMeta.Namespace,
 						Name:      podMeta.Name,
 					}
@@ -134,11 +134,11 @@ func Classify(data []payload.FlowEntry,
 			Bytes:   int(entry.Traffic),
 		})
 
-		currentFlowSize := statistics.FlowSize{
+		currentFlowSize := metrics.FlowSize{
 			Traffic: entry.Traffic,
 		}
 
-		flowKey := statistics.FlowKey{
+		flowKey := metrics.FlowKey{
 			Internet:   network.IsInternetIP(srcParsed) || network.IsInternetIP(dstParsed),
 			SameZone:   srcZone == dstZone,
 			SameRegion: false, // TODO implement

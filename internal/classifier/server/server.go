@@ -10,7 +10,7 @@ import (
 	"sync"
 
 	"github.com/acll19/netledger/internal/classifier"
-	"github.com/acll19/netledger/internal/classifier/statistics"
+	"github.com/acll19/netledger/internal/classifier/metrics"
 	"github.com/acll19/netledger/internal/network"
 	"github.com/acll19/netledger/internal/payload"
 	"github.com/prometheus/client_golang/prometheus"
@@ -23,24 +23,24 @@ import (
 
 type Server struct {
 	clientset     *kubernetes.Clientset
-	podIpIndex    map[uint32]statistics.PodKey // maps Pod IPv4s to Pod name
-	nodeIpIndex   map[uint32]string            // maps Node IPv4s to Node name (for hostNetwork pods)
-	podIndex      map[statistics.PodKey]classifier.PodInfo
+	podIpIndex    map[uint32]metrics.PodKey // maps Pod IPv4s to Pod name
+	nodeIpIndex   map[uint32]string         // maps Node IPv4s to Node name (for hostNetwork pods)
+	podIndex      map[metrics.PodKey]classifier.PodInfo
 	nodeIndex     map[string]string // maps node name to Node zone
-	ingStatistics statistics.StatisticMap
-	egStatistics  statistics.StatisticMap
+	ingStatistics metrics.StatisticMap
+	egStatistics  metrics.StatisticMap
 	mutex         sync.RWMutex
 }
 
 func NewServer(clientset *kubernetes.Clientset) *Server {
 	server := &Server{
 		clientset:     clientset,
-		podIpIndex:    map[uint32]statistics.PodKey{},
+		podIpIndex:    map[uint32]metrics.PodKey{},
 		nodeIpIndex:   map[uint32]string{},
-		podIndex:      map[statistics.PodKey]classifier.PodInfo{},
+		podIndex:      map[metrics.PodKey]classifier.PodInfo{},
 		nodeIndex:     map[string]string{},
-		ingStatistics: statistics.StatisticMap{},
-		egStatistics:  statistics.StatisticMap{},
+		ingStatistics: metrics.StatisticMap{},
+		egStatistics:  metrics.StatisticMap{},
 	}
 	return server
 }
@@ -93,7 +93,7 @@ func (s *Server) handlePod(obj any) {
 	}
 
 	s.mutex.Lock()
-	s.podIndex[statistics.PodKey{
+	s.podIndex[metrics.PodKey{
 		Namespace: pod.Namespace,
 		Name:      pod.Name,
 	}] = classifier.PodInfo{
@@ -106,7 +106,7 @@ func (s *Server) handlePod(obj any) {
 		if hostIP != 0 && ip == hostIP {
 			s.nodeIpIndex[ip] = pod.Spec.NodeName
 		} else {
-			s.podIpIndex[ip] = statistics.PodKey{
+			s.podIpIndex[ip] = metrics.PodKey{
 				Namespace: pod.Namespace,
 				Name:      pod.Name,
 			}
@@ -124,7 +124,7 @@ func (s *Server) onPodDelete(obj any) {
 	if !ok {
 		return
 	}
-	k := statistics.PodKey{
+	k := metrics.PodKey{
 		Namespace: pod.Namespace,
 		Name:      pod.Name,
 	}
@@ -150,7 +150,7 @@ func (s *Server) onPodDelete(obj any) {
 		}
 		delete(s.podIndex, k)
 
-		newEgStats := make(statistics.StatisticMap)
+		newEgStats := make(metrics.StatisticMap)
 		for statK, stat := range s.egStatistics {
 			if statK.PodName != k.Name {
 				newEgStats[statK] = stat
@@ -158,7 +158,7 @@ func (s *Server) onPodDelete(obj any) {
 		}
 		s.egStatistics = newEgStats
 
-		newIngStats := make(statistics.StatisticMap)
+		newIngStats := make(metrics.StatisticMap)
 		for statK, stat := range s.ingStatistics {
 			if statK.PodName != k.Name {
 				newIngStats[statK] = stat
@@ -266,8 +266,8 @@ func (s *Server) handlePayload(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) Describe(ch chan<- *prometheus.Desc) {
-	ch <- statistics.IngressDesc
-	ch <- statistics.EgressDesc
+	ch <- metrics.IngressDesc
+	ch <- metrics.EgressDesc
 }
 
 func (s *Server) Collect(ch chan<- prometheus.Metric) {
@@ -276,7 +276,7 @@ func (s *Server) Collect(ch chan<- prometheus.Metric) {
 
 	for fk, s := range s.ingStatistics {
 		ch <- prometheus.MustNewConstMetric(
-			statistics.IngressDesc,
+			metrics.IngressDesc,
 			prometheus.CounterValue,
 			float64(s.Traffic),
 			fk.Namespace,
@@ -289,7 +289,7 @@ func (s *Server) Collect(ch chan<- prometheus.Metric) {
 
 	for fk, s := range s.egStatistics {
 		ch <- prometheus.MustNewConstMetric(
-			statistics.EgressDesc,
+			metrics.EgressDesc,
 			prometheus.CounterValue,
 			float64(s.Traffic),
 			fk.Namespace,
