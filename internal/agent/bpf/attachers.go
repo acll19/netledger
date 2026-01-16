@@ -24,19 +24,14 @@ func AttachRootCgroup(prg *ebpf.Program) (link.Link, error) {
 	return cgroupIngressLink, err
 }
 
-func AttachTcxToCiliumHostVeth(ifaces []net.Interface, prg *ebpf.Program, attachType ebpf.AttachType) ([]link.Link, map[int]net.Interface, error) {
+func AttachTcxToCiliumHostVeths(ifaces []net.Interface, prg *ebpf.Program, attachType ebpf.AttachType) ([]link.Link, map[int]net.Interface, error) {
 	ifacesMap := make(map[int]net.Interface)
 	activeLinks := make([]link.Link, 0)
 	for _, iface := range ifaces {
-		l, err := link.AttachTCX(link.TCXOptions{
-			Interface: iface.Index,
-			Program:   prg,
-			Attach:    attachType,
-		})
+		l, err := attachTcxToCiliumHostVeth(iface, prg, attachType)
 		if err != nil {
-			return nil, nil, fmt.Errorf("attach tcx program to interface %s: %w", iface.Name, err)
+			return nil, nil, err
 		}
-
 		activeLinks = append(activeLinks, l)
 		ifacesMap[iface.Index] = iface
 	}
@@ -44,7 +39,20 @@ func AttachTcxToCiliumHostVeth(ifaces []net.Interface, prg *ebpf.Program, attach
 	return activeLinks, ifacesMap, nil
 }
 
-func SubscribeToLinkUpdates(ifacesMap map[int]net.Interface, activeLinks []link.Link, prg *ebpf.Program, attachType ebpf.AttachType) (chan struct{}, error) {
+func attachTcxToCiliumHostVeth(iface net.Interface, prg *ebpf.Program, attachType ebpf.AttachType) (link.Link, error) {
+	l, err := link.AttachTCX(link.TCXOptions{
+		Interface: iface.Index,
+		Program:   prg,
+		Attach:    attachType,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("attach tcx program to interface %s: %w", iface.Name, err)
+	}
+
+	return l, nil
+}
+
+func ManageTCXLinks(ifacesMap map[int]net.Interface, activeLinks []link.Link, prg *ebpf.Program, attachType ebpf.AttachType) (chan struct{}, error) {
 	ch := make(chan netlink.LinkUpdate)
 	done := make(chan struct{})
 
@@ -72,22 +80,18 @@ func SubscribeToLinkUpdates(ifacesMap map[int]net.Interface, activeLinks []link.
 				}
 			case unix.RTM_NEWLINK:
 				if strings.HasPrefix(update.Attrs().Name, "lxc") {
-					l, err := link.AttachTCX(link.TCXOptions{
-						Interface: update.Attrs().Index,
-						Program:   prg,
-						Attach:    attachType,
-					})
+					iface, err := net.InterfaceByName(update.Attrs().Name)
+					if err != nil {
+						slog.Error("error getting interface by name", "interface", update.Attrs().Name, "error", err)
+						return
+					}
+					l, err := attachTcxToCiliumHostVeth(*iface, prg, attachType)
 					if err != nil {
 						slog.Error("error attaching tcx program to interface", "interface", update.Attrs().Name, "error", err)
 						return
 					}
 					activeLinks = append(activeLinks, l)
-					netIface, err := net.InterfaceByName(update.Attrs().Name)
-					if err != nil {
-						slog.Error("error getting interface by name", "interface", update.Attrs().Name, "error", err)
-						return
-					}
-					ifacesMap[update.Attrs().Index] = *netIface
+					ifacesMap[update.Attrs().Index] = *iface
 				}
 
 			}
