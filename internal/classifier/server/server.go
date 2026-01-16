@@ -149,9 +149,24 @@ func (s *Server) onPodDelete(obj any) {
 			}
 		}
 		delete(s.podIndex, k)
+
+		newEgStats := make(statistics.StatisticMap)
+		for statK, stat := range s.egStatistics {
+			if statK.PodName != k.Name {
+				newEgStats[statK] = stat
+			}
+		}
+		s.egStatistics = newEgStats
+
+		newIngStats := make(statistics.StatisticMap)
+		for statK, stat := range s.ingStatistics {
+			if statK.PodName != k.Name {
+				newIngStats[statK] = stat
+			}
+		}
+		s.ingStatistics = newIngStats
 	}
 
-	// TODO: must delete from statistics (ing and eg)
 	s.mutex.Unlock()
 }
 
