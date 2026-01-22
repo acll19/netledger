@@ -1,4 +1,4 @@
 agent/netledger_bpfeb.o
 agent/netledger_bpfel.o
 netledger-agent
-netledger-server
+netledger-classifier

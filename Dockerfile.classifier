@@ -1,0 +1,3 @@
+FROM cgr.dev/chainguard/static
+ADD netledger-classifier /netledger-classifier
+ENTRYPOINT ["/netledger-classifier"]

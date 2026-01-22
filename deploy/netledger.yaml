@@ -69,11 +69,11 @@ spec:
         image: ghcr.io/acll19/kubenet/netledger-agent:v1
         imagePullPolicy: IfNotPresent
         args:
-        - -server=http://netledger-server.netledger.svc.cluster.local./write-network-statistics
         # - -server=http://172.18.0.1:8080/write-network-statistics
-        - -subnet-cidr=0.0.0.0/0
-        - -node=$(NODE_NAME)
+        - -server=http://netledger-classifier.netledger.svc.cluster.local./write-network-statistics
+        - -serviceCidr=10.11.0.0/16
         - -debug=true
+        - -node=$(NODE_NAME)
         env:
         - name: NODE_NAME
           valueFrom:
@@ -83,78 +83,78 @@ spec:
           privileged: true
           readOnlyRootFilesystem: true
 ---
-# apiVersion: v1
-# kind: ServiceAccount
-# metadata:
-#   name: netledger-server
-#   namespace: netledger
-# ---
-# apiVersion: rbac.authorization.k8s.io/v1
-# kind: ClusterRole
-# metadata:
-#   name: netledger-server
-# rules:
-# - apiGroups: [""]
-#   resources: ["pods", "nodes"]
-#   verbs: ["watch", "list"]
-# ---
-# apiVersion: rbac.authorization.k8s.io/v1
-# kind: ClusterRoleBinding
-# metadata:
-#   name: netledger-server
-# roleRef:
-#   apiGroup: rbac.authorization.k8s.io
-#   kind: ClusterRole
-#   name: netledger-server
-# subjects:
-# - kind: ServiceAccount
-#   name: netledger-server
-#   namespace: netledger
-# ---
-# apiVersion: v1
-# kind: Service
-# metadata:
-#   name: netledger-server
-#   namespace: netledger
-#   labels:
-#     app.kubernetes.io/component: server
-#     app.kubernetes.io/instance: main
-#     app.kubernetes.io/name: netledger
-# spec:
-#   selector:
-#     app.kubernetes.io/component: server
-#     app.kubernetes.io/instance: main
-#     app.kubernetes.io/name: netledger
-#   ports:
-#   - port: 80
-#     targetPort: 8080
-#     name: http
-# ---
-# apiVersion: apps/v1
-# kind: Deployment
-# metadata:
-#   name: netledger-server
-#   namespace: netledger
-# spec:
-#   selector:
-#     matchLabels:
-#       app.kubernetes.io/component: server
-#       app.kubernetes.io/instance: main
-#       app.kubernetes.io/name: netledger
-#   template:
-#     metadata:
-#       labels:
-#         app.kubernetes.io/component: server
-#         app.kubernetes.io/instance: main
-#         app.kubernetes.io/name: netledger
-#     spec:
-#       serviceAccountName: netledger-server
-#       imagePullSecrets:
-#       - name: ghcr-secret
-#       containers:
-#       - name: netledger-server
-#         image: ghcr.io/acll19/kubenet/netledger-server:v0.2.10
-#         imagePullPolicy: IfNotPresent
-#         ports:
-#         - containerPort: 8080
-#           name: http
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: netledger-classifier
+  namespace: netledger
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: netledger-classifier
+rules:
+- apiGroups: [""]
+  resources: ["pods", "nodes"]
+  verbs: ["watch", "list"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: netledger-classifier
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: netledger-classifier
+subjects:
+- kind: ServiceAccount
+  name: netledger-classifier
+  namespace: netledger
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: netledger-classifier
+  namespace: netledger
+  labels:
+    app.kubernetes.io/component: classifier
+    app.kubernetes.io/instance: main
+    app.kubernetes.io/name: netledger
+spec:
+  selector:
+    app.kubernetes.io/component: classifier
+    app.kubernetes.io/instance: main
+    app.kubernetes.io/name: netledger
+  ports:
+  - port: 80
+    targetPort: 8080
+    name: http
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: netledger-classifier
+  namespace: netledger
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/component: classifier
+      app.kubernetes.io/instance: main
+      app.kubernetes.io/name: netledger
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/component: classifier
+        app.kubernetes.io/instance: main
+        app.kubernetes.io/name: netledger
+    spec:
+      serviceAccountName: netledger-classifier
+      imagePullSecrets:
+      - name: ghcr-secret
+      containers:
+      - name: netledger-classifier
+        image: ghcr.io/acll19/kubenet/netledger-classifier:v1
+        imagePullPolicy: IfNotPresent
+        ports:
+        - containerPort: 8080
+          name: http

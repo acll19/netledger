@@ -47,7 +47,7 @@ func Run(flushInterval time.Duration, node, server, serviceCidr string, debug bo
 
 	ip, ipNet, err := net.ParseCIDR(serviceCidr)
 	if err != nil || ip == nil || ip.To4() == nil {
-		return fmt.Errorf("Invalid Service CIDR")
+		return fmt.Errorf("error parsing service CIDR, %w", err)
 	}
 
 	ipUint := network.IpToUint32(ip)

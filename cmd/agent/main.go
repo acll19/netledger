@@ -1,20 +1,32 @@
 package main
 
 import (
-	"os"
+	"flag"
 	"time"
 
 	"github.com/acll19/netledger/internal/agent"
 )
 
+var (
+	server      string
+	serviceCidr string
+	node        string
+	debug       bool
+)
+
 func main() {
+	flag.Parse()
+
 	fi := 2 * time.Second
-	node := os.Getenv("NODE_NAME")
-	server := "http://172.18.0.1:8080/write-network-statistics"
-	serviceCidr := "10.11.0.0/16"
-	debug := true
 	err := agent.Run(fi, node, server, serviceCidr, debug)
 	if err != nil {
 		panic(err)
 	}
+}
+
+func init() {
+	flag.StringVar(&server, "server", "", "The classifier path to send flows to")
+	flag.StringVar(&serviceCidr, "serviceCidr", "", "The cluster service CIDR")
+	flag.StringVar(&node, "node", "", "Agent node name")
+	flag.BoolVar(&debug, "debug", false, "Enable debug logging")
 }

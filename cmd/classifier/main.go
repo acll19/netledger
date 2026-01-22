@@ -16,7 +16,6 @@ func main() {
 
 	server := server.NewServer(clientset)
 
-	// Start watching Pods and Nodes
 	go server.WatchPods()
 	go server.WatchNodes()
 

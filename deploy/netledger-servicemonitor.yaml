@@ -1,0 +1,22 @@
+# This is an optional component that can be deployed if the Prometheus Operator is used
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  labels:
+    app.kubernetes.io/component: classifier
+    app.kubernetes.io/name: netledger
+    app.kubernetes.io/version: main
+    release: prometheus-stack
+  name: netledger-classifier
+  namespace: netledger
+spec:
+  endpoints:
+  - honorLabels: true
+    interval: 15s
+    port: http
+    scheme: http
+    scrapeTimeout: 10s
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: netledger
+
