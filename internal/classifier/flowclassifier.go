@@ -16,7 +16,8 @@ type PodInfo struct {
 }
 
 type NodeInfo struct {
-	Zone string
+	Zone   string
+	Region string
 }
 
 type FlowLog struct {
@@ -32,88 +33,75 @@ type FlowLog struct {
 func Classify(data []payload.FlowEntry,
 	podIndex map[metrics.PodKey]PodInfo,
 	podIpIndex map[uint32]metrics.PodKey,
-	nodeIndex map[string]string,
+	nodeIndex map[string]NodeInfo,
 	ingStatistics metrics.StatisticMap,
 	egStatistics metrics.StatisticMap,
 ) []FlowLog {
 	FlowLogs := make([]FlowLog, 0, len(data))
-	processedIngressPods := make(map[string]metrics.PodKey)
-	processedEgressPods := make(map[string]metrics.PodKey)
+	processedPods := make(map[string]metrics.PodKey)
 	for _, entry := range data {
 		var srcPod, dstPod metrics.PodKey
 		srcIp := entry.SrcIP
 		dstIp := entry.DstIP
-		var srcZone, dstZone string // TODO src & dst regions too
+		var srcZone, dstZone, srcRegion, dstRegion string
 
 		switch entry.Direction {
 		case "egress":
 			if entry.PodName != "unknown" {
-				processedEgressPods[srcIp] = metrics.PodKey{
-					Namespace: entry.PodNamespace,
-					Name:      entry.PodName,
-				}
 				srcPod = metrics.PodKey{
 					Namespace: entry.PodNamespace,
 					Name:      entry.PodName,
 				}
+				processedPods[srcIp] = srcPod
 			} else {
-				if podMeta, ok := processedEgressPods[srcIp]; ok {
-					srcPod = metrics.PodKey{
-						Namespace: podMeta.Namespace,
-						Name:      podMeta.Name,
-					}
-				} else {
-					parsedIP, err := network.StringIpToNetIp(srcIp)
-					if err != nil {
-						continue
-					}
-					pod, ok := podIpIndex[network.IpToUint32(parsedIP)]
-					if !ok {
-						continue
-					}
-					if !ok {
-						continue
-					}
-					srcPod = pod
+				pod, ok := searchPod(processedPods, srcIp, podIpIndex)
+				if !ok {
+					continue
 				}
+
+				srcPod = pod
+				processedPods[srcIp] = srcPod
 			}
+
+			pod, ok := searchPod(processedPods, dstIp, podIpIndex)
+			if !ok {
+				continue
+			}
+			dstPod = pod
+			processedPods[dstIp] = dstPod
 		case "ingress":
 			if entry.PodName != "unknown" {
-				processedIngressPods[dstIp] = metrics.PodKey{
-					Namespace: entry.PodNamespace,
-					Name:      entry.PodName,
-				}
 				dstPod = metrics.PodKey{
 					Namespace: entry.PodNamespace,
 					Name:      entry.PodName,
 				}
+				processedPods[dstIp] = dstPod
 			} else {
-				if podMeta, ok := processedIngressPods[dstIp]; ok {
-					dstPod = metrics.PodKey{
-						Namespace: podMeta.Namespace,
-						Name:      podMeta.Name,
-					}
-				} else {
-					parsedIP, err := network.StringIpToNetIp(dstIp)
-					if err != nil {
-						continue
-					}
-					pod, ok := podIpIndex[network.IpToUint32(parsedIP)]
-					if !ok {
-						continue
-					}
-					dstPod = pod
+				pod, ok := searchPod(processedPods, dstIp, podIpIndex)
+				if !ok {
+					continue
 				}
+				dstPod = pod
+				processedPods[dstIp] = dstPod
 			}
+
+			pod, ok := searchPod(processedPods, srcIp, podIpIndex)
+			if !ok {
+				continue
+			}
+			srcPod = pod
+			processedPods[srcIp] = srcPod
 		}
 
 		sp := podIndex[srcPod]
 		srcNode := sp.Node
-		srcZone = nodeIndex[srcNode]
+		srcZone = nodeIndex[srcNode].Zone
+		srcRegion = nodeIndex[srcNode].Region
 
 		dp := podIndex[dstPod]
 		dstNode := dp.Node
-		dstZone = nodeIndex[dstNode]
+		dstZone = nodeIndex[dstNode].Zone
+		dstRegion = nodeIndex[dstNode].Region
 
 		srcParsed, err := netip.ParseAddr(srcIp)
 		if err != nil {
@@ -141,7 +129,7 @@ func Classify(data []payload.FlowEntry,
 		flowKey := metrics.FlowKey{
 			Internet:   network.IsInternetIP(srcParsed) || network.IsInternetIP(dstParsed),
 			SameZone:   srcZone == dstZone,
-			SameRegion: false, // TODO implement
+			SameRegion: srcRegion == dstRegion,
 		}
 
 		if entry.Direction == "ingress" {
@@ -168,4 +156,21 @@ func Classify(data []payload.FlowEntry,
 
 	}
 	return FlowLogs
+}
+
+func searchPod(processedPods map[string]metrics.PodKey, ip string, podIpIndex map[uint32]metrics.PodKey) (metrics.PodKey, bool) {
+	if podMeta, ok := processedPods[ip]; ok {
+		pod := metrics.PodKey{
+			Namespace: podMeta.Namespace,
+			Name:      podMeta.Name,
+		}
+		return pod, true
+	} else {
+		parsedIP, err := network.StringIpToNetIp(ip)
+		if err != nil {
+			return metrics.PodKey{}, false
+		}
+		pod, ok := podIpIndex[network.IpToUint32(parsedIP)]
+		return pod, ok
+	}
 }

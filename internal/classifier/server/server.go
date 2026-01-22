@@ -26,7 +26,7 @@ type Server struct {
 	podIpIndex    map[uint32]metrics.PodKey // maps Pod IPv4s to Pod name
 	nodeIpIndex   map[uint32]string         // maps Node IPv4s to Node name (for hostNetwork pods)
 	podIndex      map[metrics.PodKey]classifier.PodInfo
-	nodeIndex     map[string]string // maps node name to Node zone
+	nodeIndex     map[string]classifier.NodeInfo
 	ingStatistics metrics.StatisticMap
 	egStatistics  metrics.StatisticMap
 	mutex         sync.RWMutex
@@ -38,7 +38,7 @@ func NewServer(clientset *kubernetes.Clientset) *Server {
 		podIpIndex:    map[uint32]metrics.PodKey{},
 		nodeIpIndex:   map[uint32]string{},
 		podIndex:      map[metrics.PodKey]classifier.PodInfo{},
-		nodeIndex:     map[string]string{},
+		nodeIndex:     map[string]classifier.NodeInfo{},
 		ingStatistics: metrics.StatisticMap{},
 		egStatistics:  metrics.StatisticMap{},
 	}
@@ -176,11 +176,15 @@ func (s *Server) onNodeAdd(obj any) {
 		return
 	}
 	zone, ok := node.GetLabels()["topology.kubernetes.io/zone"]
+	region, ok := node.GetLabels()["topology.kubernetes.io/region"]
 	if !ok {
 		zone = "unknown"
 	}
 	s.mutex.Lock()
-	s.nodeIndex[node.Name] = zone
+	s.nodeIndex[node.Name] = classifier.NodeInfo{
+		Region: region,
+		Zone:   zone,
+	}
 	s.mutex.Unlock()
 }
 
@@ -190,11 +194,15 @@ func (s *Server) onNodeUpdate(oldObj, newObj any) {
 		return
 	}
 	zone, ok := node.GetLabels()["topology.kubernetes.io/zone"]
+	region, ok := node.GetLabels()["topology.kubernetes.io/region"]
 	if !ok {
 		zone = "unknown"
 	}
 	s.mutex.Lock()
-	s.nodeIndex[node.Name] = zone
+	s.nodeIndex[node.Name] = classifier.NodeInfo{
+		Zone:   zone,
+		Region: region,
+	}
 	s.mutex.Unlock()
 }
 
