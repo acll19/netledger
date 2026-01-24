@@ -159,8 +159,10 @@ func Run(flushInterval time.Duration, node, server, serviceCidr string, debug bo
 			log.Println("debug printing", len(fKeys), "keys", "started with", n, "keys before filtering to host-local pods (", len(keys), ")")
 			entries := make([]payload.FlowEntry, 0, len(fKeys))
 			for i := range len(fKeys) {
-				pod, err := cgroup.GetPodByCgroupID(fKeys[i].CgroupId, podsOnHost)
+				srcIpSrcIp := net.IPv4(byte(fKeys[i].SrcIp), byte(fKeys[i].SrcIp>>8), byte(fKeys[i].SrcIp>>16), byte(fKeys[i].SrcIp>>24)).String()
+				dstIpDstIp := net.IPv4(byte(fKeys[i].DstIp), byte(fKeys[i].DstIp>>8), byte(fKeys[i].DstIp>>16), byte(fKeys[i].DstIp>>24)).String()
 				var name, ns string
+				pod, err := cgroup.GetPodByCgroupID(fKeys[i].CgroupId, podsOnHost)
 				if err != nil {
 					if debug {
 						slog.Info("skipping traffic from non-pod cgroup", "cgroup_id", fKeys[i].CgroupId, "reason", err)
@@ -176,9 +178,6 @@ func Run(flushInterval time.Duration, node, server, serviceCidr string, debug bo
 				if fKeys[i].Direction == 1 {
 					direction = "ingress"
 				}
-
-				srcIpSrcIp := net.IPv4(byte(fKeys[i].SrcIp), byte(fKeys[i].SrcIp>>8), byte(fKeys[i].SrcIp>>16), byte(fKeys[i].SrcIp>>24)).String()
-				dstIpDstIp := net.IPv4(byte(fKeys[i].DstIp), byte(fKeys[i].DstIp>>8), byte(fKeys[i].DstIp>>16), byte(fKeys[i].DstIp>>24)).String()
 
 				if debug {
 					slog.Info(fmt.Sprintf("[%s] %s:%d -> %s:%d: %d bytes (pod: %s/%s)\n", direction, srcIpSrcIp, fKeys[i].SrcPort, dstIpDstIp, fKeys[i].DstPort, fValues[i].PacketSize, ns, name))

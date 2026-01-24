@@ -44,52 +44,32 @@ func Classify(data []payload.FlowEntry,
 		srcIp := entry.SrcIP
 		dstIp := entry.DstIP
 		var srcZone, dstZone, srcRegion, dstRegion string
-
 		switch entry.Direction {
 		case "egress":
-			if entry.PodName != "unknown" {
-				srcPod = metrics.PodKey{
-					Namespace: entry.PodNamespace,
-					Name:      entry.PodName,
-				}
-				processedPods[srcIp] = srcPod
-			} else {
-				pod, ok := searchPod(processedPods, srcIp, podIpIndex)
-				if !ok {
-					continue
-				}
-
-				srcPod = pod
-				processedPods[srcIp] = srcPod
-			}
-
-			pod, ok := searchPod(processedPods, dstIp, podIpIndex)
-			if !ok {
+			var podFound bool
+			srcPod, podFound = searchPod(processedPods, srcIp, podIpIndex)
+			if !podFound {
 				continue
 			}
-			dstPod = pod
+			processedPods[srcIp] = srcPod
+
+			dstPod, podFound = searchPod(processedPods, dstIp, podIpIndex)
+			if !podFound {
+				continue
+			}
 			processedPods[dstIp] = dstPod
 		case "ingress":
-			if entry.PodName != "unknown" {
-				dstPod = metrics.PodKey{
-					Namespace: entry.PodNamespace,
-					Name:      entry.PodName,
-				}
-				processedPods[dstIp] = dstPod
-			} else {
-				pod, ok := searchPod(processedPods, dstIp, podIpIndex)
-				if !ok {
-					continue
-				}
-				dstPod = pod
-				processedPods[dstIp] = dstPod
-			}
-
-			pod, ok := searchPod(processedPods, srcIp, podIpIndex)
-			if !ok {
+			var podFound bool
+			dstPod, podFound = searchPod(processedPods, dstIp, podIpIndex)
+			if !podFound {
 				continue
 			}
-			srcPod = pod
+			processedPods[dstIp] = dstPod
+
+			srcPod, podFound = searchPod(processedPods, srcIp, podIpIndex)
+			if !podFound {
+				continue
+			}
 			processedPods[srcIp] = srcPod
 		}
 

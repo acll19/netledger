@@ -1,0 +1,23 @@
+{
+    "version": "2.0.0",
+    "tasks": [
+        {
+            "label": "Run Agent with Delve (root)",
+            "type": "shell",
+            "command": "sudo -E /home/armando/go/bin/dlv debug ./cmd/agent --headless --listen=:2345 --api-version=2 --log -- -server='http://172.18.0.1:8080/write-network-statistics' -serviceCidr='10.11.0.0/16' -node='with-cillium-worker2' debug=true",
+            "problemMatcher": [],
+            "isBackground": true,
+            "options": {
+                "env": {
+                    "KUBECONFIG": "${userHome}/.kube/config"
+                }
+            },
+            "presentation": {
+                "echo": true,
+                "reveal": "always",
+                "focus": false,
+                "panel": "shared"
+            }
+        }
+    ]
+}
