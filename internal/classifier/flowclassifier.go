@@ -2,7 +2,6 @@ package classifier
 
 import (
 	"fmt"
-	"log"
 	"net/netip"
 
 	"github.com/acll19/netledger/internal/classifier/metrics"
@@ -21,13 +20,14 @@ type NodeInfo struct {
 }
 
 type FlowLog struct {
-	Src     string
-	SrcIp   netip.Addr
-	SrcPort int
-	Dst     string
-	DstIP   netip.Addr
-	DstPort int
-	Bytes   int
+	Src       string
+	SrcIP     netip.Addr
+	SrcPort   int
+	Dst       string
+	DstIP     netip.Addr
+	DstPort   int
+	Direction int
+	Bytes     int
 }
 
 func Classify(data []payload.FlowEntry,
@@ -37,120 +37,93 @@ func Classify(data []payload.FlowEntry,
 	ingStatistics metrics.StatisticMap,
 	egStatistics metrics.StatisticMap,
 ) []FlowLog {
-	FlowLogs := make([]FlowLog, 0, len(data))
-	processedPods := make(map[string]metrics.PodKey)
+	flowLogs := make([]FlowLog, 0, len(data))
 	for _, entry := range data {
 		var srcPod, dstPod metrics.PodKey
 		srcIp := entry.SrcIP
 		dstIp := entry.DstIP
 		var srcZone, dstZone, srcRegion, dstRegion string
-		switch entry.Direction {
-		case "egress":
-			var podFound bool
-			srcPod, podFound = searchPod(processedPods, srcIp, podIpIndex)
-			if !podFound {
-				continue
-			}
-			processedPods[srcIp] = srcPod
+		var srcParsed, dstParsed netip.Addr
 
-			dstPod, podFound = searchPod(processedPods, dstIp, podIpIndex)
-			if !podFound {
-				continue
-			}
-			processedPods[dstIp] = dstPod
-		case "ingress":
-			var podFound bool
-			dstPod, podFound = searchPod(processedPods, dstIp, podIpIndex)
-			if !podFound {
-				continue
-			}
-			processedPods[dstIp] = dstPod
+		srcPod, _ = searchPod(srcIp, podIpIndex)
+		dstPod, _ = searchPod(dstIp, podIpIndex)
 
-			srcPod, podFound = searchPod(processedPods, srcIp, podIpIndex)
-			if !podFound {
-				continue
-			}
-			processedPods[srcIp] = srcPod
-		}
-
-		sp := podIndex[srcPod]
-		srcNode := sp.Node
+		srcPodInfo := podIndex[srcPod]
+		srcNode := srcPodInfo.Node
 		srcZone = nodeIndex[srcNode].Zone
 		srcRegion = nodeIndex[srcNode].Region
 
-		dp := podIndex[dstPod]
-		dstNode := dp.Node
+		dstPodInfo := podIndex[dstPod]
+		dstNode := dstPodInfo.Node
 		dstZone = nodeIndex[dstNode].Zone
 		dstRegion = nodeIndex[dstNode].Region
 
-		srcParsed, err := netip.ParseAddr(srcIp)
-		if err != nil {
-			log.Printf("Failed to parse src IP: %v", err)
-		}
-		dstParsed, err := netip.ParseAddr(dstIp)
-		if err != nil {
-			log.Printf("Failed to parse dst IP: %v", err)
-		}
+		srcParsed, _ = netip.ParseAddr(srcIp)
+		dstParsed, _ = netip.ParseAddr(dstIp)
 
-		FlowLogs = append(FlowLogs, FlowLog{
-			Src:     fmt.Sprintf("%s/%s", srcPod.Namespace, srcPod.Name),
-			SrcIp:   srcParsed,
-			SrcPort: int(entry.SrcPort),
-			Dst:     fmt.Sprintf("%s/%s", dstPod.Namespace, dstPod.Name),
-			DstIP:   dstParsed,
-			DstPort: int(entry.DstPort),
-			Bytes:   int(entry.Traffic),
-		})
-
-		currentFlowSize := metrics.FlowSize{
-			Traffic: entry.Traffic,
-		}
+		isInternet := network.IsInternetIP(srcParsed) || network.IsInternetIP(dstParsed)
 
 		flowKey := metrics.FlowKey{
-			Internet:   network.IsInternetIP(srcParsed) || network.IsInternetIP(dstParsed),
+			Internet:   isInternet,
 			SameZone:   srcZone == dstZone,
 			SameRegion: srcRegion == dstRegion,
 		}
 
-		if entry.Direction == "ingress" {
-			flowKey.PodName = dstPod.Name
-			flowKey.Namespace = dstPod.Namespace
-
-			if fs, found := ingStatistics[flowKey]; found {
-				fs.Traffic += currentFlowSize.Traffic
-				ingStatistics[flowKey] = fs
-			} else {
-				ingStatistics[flowKey] = currentFlowSize
-			}
-		} else {
+		// Internal communication. Just take the egress side and invert values for ingress
+		if !isInternet && entry.Direction == 0 { // egress
 			flowKey.PodName = srcPod.Name
 			flowKey.Namespace = srcPod.Namespace
+			currentFlow := egStatistics[flowKey]
+			egStatistics[flowKey] = metrics.FlowSize{
+				Traffic: entry.TxBytes + currentFlow.Traffic,
+			}
 
-			if fs, found := egStatistics[flowKey]; found {
-				fs.Traffic += currentFlowSize.Traffic
-				egStatistics[flowKey] = fs
-			} else {
-				egStatistics[flowKey] = currentFlowSize
+			flowKey.PodName = dstPod.Name
+			flowKey.Namespace = dstPod.Namespace
+			currentFlow = ingStatistics[flowKey]
+			ingStatistics[flowKey] = metrics.FlowSize{
+				Traffic: entry.RxBytes + currentFlow.Traffic,
 			}
 		}
 
+		if isInternet {
+			switch entry.Direction {
+			case 0: // egress
+				flowKey.PodName = srcPod.Name
+				flowKey.Namespace = srcPod.Namespace
+				currentFlow := egStatistics[flowKey]
+				egStatistics[flowKey] = metrics.FlowSize{
+					Traffic: entry.TxBytes + currentFlow.Traffic,
+				}
+			case 1: // ingress
+				flowKey.PodName = dstPod.Name
+				flowKey.Namespace = dstPod.Namespace
+				currentFlow := ingStatistics[flowKey]
+				ingStatistics[flowKey] = metrics.FlowSize{
+					Traffic: entry.RxBytes + currentFlow.Traffic,
+				}
+			}
+		}
+
+		flowLogs = append(flowLogs, FlowLog{
+			Src:       fmt.Sprintf("%s/%s", srcPod.Namespace, srcPod.Name),
+			SrcIP:     srcParsed,
+			SrcPort:   int(entry.SrcPort),
+			Dst:       fmt.Sprintf("%s/%s", dstPod.Namespace, dstPod.Name),
+			DstIP:     dstParsed,
+			DstPort:   int(entry.DstPort),
+			Direction: entry.Direction,
+			Bytes:     int(entry.TxBytes) + int(entry.RxBytes), // show total for now
+		})
 	}
-	return FlowLogs
+	return flowLogs
 }
 
-func searchPod(processedPods map[string]metrics.PodKey, ip string, podIpIndex map[uint32]metrics.PodKey) (metrics.PodKey, bool) {
-	if podMeta, ok := processedPods[ip]; ok {
-		pod := metrics.PodKey{
-			Namespace: podMeta.Namespace,
-			Name:      podMeta.Name,
-		}
-		return pod, true
-	} else {
-		parsedIP, err := network.StringIpToNetIp(ip)
-		if err != nil {
-			return metrics.PodKey{}, false
-		}
-		pod, ok := podIpIndex[network.IpToUint32(parsedIP)]
-		return pod, ok
+func searchPod(ip string, podIpIndex map[uint32]metrics.PodKey) (metrics.PodKey, bool) {
+	parsedIP, err := network.StringIpToNetIp(ip)
+	if err != nil {
+		return metrics.PodKey{}, false
 	}
+	pod, ok := podIpIndex[network.IpToUint32(parsedIP)]
+	return pod, ok
 }

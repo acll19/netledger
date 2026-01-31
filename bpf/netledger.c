@@ -8,204 +8,233 @@ char __license[] SEC("license") = "Dual MIT/GPL";
 
 #define IPPROTO_TCP 6
 #define IPPROTO_UDP 17
+
 #define TC_ACT_OK 0
 #define ETH_P_IP 0x0800
 
-struct ip_key
-{
+#define CONN_POD_ORIGINATED      0
+#define CONN_EXTERNAL_ORIGINATED 1
+
+/*
+ * Keyed by socket cookie.
+ * This is what user space consumes.
+ */
+struct conn_val {
     __u64 cgroup_id;
+
+    /* canonical tuple */
     __u32 src_ip;
     __u32 dst_ip;
     __u16 src_port;
     __u16 dst_port;
-    __u8 direction; // 0 = egress, 1 = ingress
+    __u8  proto;
+
+    /* who initiated the connection */
+    __u8  conn_direction;
+
+    /* byte counters */
+    __u64 tx_bytes;
+    __u64 rx_bytes;
+
+    /* tuple learning state */
+    __u8  have_src;
+    __u8  have_dst;
 };
 
-struct ip_value
-{
-    __u64 packet_size;
-};
-
-volatile const __u32 service_subnet_prefix;
-volatile const __u32 service_subnet_mask;
-
-struct
-{
+struct {
     __uint(type, BPF_MAP_TYPE_HASH);
-    __type(key, struct ip_key);
-    __type(value, struct ip_value);
-    __uint(max_entries, 65536);
-    // The 65536 is suitable for (maybe this value should come from user space)
-    // for AKS nodes with 250 pods and 260 active connections each
-    // for EKS Standard EC2 (m5.large) nodes and similar pod density as above
-    // for GKE 65536 is OK for standard Max. Pods/Nodes (110)
+    __uint(max_entries, 131072);
+    __type(key, __u64);              /* socket cookie */
+    __type(value, struct conn_val);
+} conn_map SEC(".maps");
 
-    // for EKS Nitro with Prefix delegation instances maybe use 131072
-    // for EKS Network-Optimized (c6in) instances maybe use 262144
-    // for GKE High Density configuration (256 pods) maybe use 131072
-} ip_map SEC(".maps");
+/* ============================================================
+ * Helpers
+ * ============================================================ */
 
-static __always_inline int handle_socket_packet_ipv4(struct __sk_buff *skb, __u8 direction)
+/* Parse IPv4 + L4 headers and fill tuple */
+static __always_inline int parse_ipv4_tuple(struct __sk_buff *skb, struct conn_val *c, __u8 *is_tcp_syn)
 {
-    // allowed since v4.7+
-    void *data = (void *)(long)skb->data;
+    void *data     = (void *)(long)skb->data;
     void *data_end = (void *)(long)skb->data_end;
 
     struct iphdr *iph = data;
-    // MANDATORY: Verifier check to ensure the header is within bounds
-    if ((void *)iph + sizeof(struct iphdr) > data_end)
-    {
-        return 1;
-    }
+    if ((void *)iph + sizeof(*iph) > data_end)
+        return -1;
 
     if (iph->version != 4)
+        return -1;
+
+    c->src_ip = iph->saddr;
+    c->dst_ip = iph->daddr;
+    c->proto  = iph->protocol;
+
+    if (iph->protocol == IPPROTO_TCP) {
+        struct tcphdr *th = data + iph->ihl * 4;
+        if ((void *)th + sizeof(*th) > data_end)
+            return -1;
+
+        c->src_port = bpf_ntohs(th->source);
+        c->dst_port = bpf_ntohs(th->dest);
+        *is_tcp_syn = th->syn && !th->ack;
+        return 0;
+    }
+
+    if (iph->protocol == IPPROTO_UDP) {
+        struct udphdr *uh = data + iph->ihl * 4;
+        if ((void *)uh + sizeof(*uh) > data_end)
+            return -1;
+
+        c->src_port = bpf_ntohs(uh->source);
+        c->dst_port = bpf_ntohs(uh->dest);
+        *is_tcp_syn = 0;
+        return 0;
+    }
+
+    return -1;
+}
+
+/* ============================================================
+ * bind4 — learn local (source) tuple for pod-originated
+ * ============================================================ */
+
+SEC("cgroup/bind4")
+int cg_bind4(struct bpf_sock_addr *ctx)
+{
+    __u64 cookie = bpf_get_socket_cookie(ctx);
+
+    struct conn_val *c = bpf_map_lookup_elem(&conn_map, &cookie);
+    if (!c)
         return 1;
 
-    __u32 saddr = iph->saddr;
-    __u32 daddr = iph->daddr;
-    __u8 proto = iph->protocol;
-    __u8 ihl = iph->ihl * 4;
-    // the IHL (Internet Header Length) field specifies the number of
-    // 32-bit words in the IPv4 header. Multiplying by 4 converts this value into total bytes.
-    // Basically, this is the size of the IP header
-
-    struct ip_key key = {};
-    key.cgroup_id = bpf_skb_cgroup_id(skb);
-    key.src_ip = saddr;
-    key.dst_ip = daddr;
-    key.direction = direction;
-
-    if (proto == IPPROTO_TCP)
-    {
-        struct tcphdr *th = (void *)data + ihl;
-        // data + ihl positions at the start of the TCP/UDP header
-        // then we can parse ports
-
-        // Bounds check: ensure TCP header fits within packet
-        if ((void *)th + sizeof(struct tcphdr) > data_end)
-            return 1;
-        key.src_port = bpf_ntohs(th->source);
-        key.dst_port = bpf_ntohs(th->dest);
-    }
-    else if (proto == IPPROTO_UDP)
-    {
-        struct udphdr *uh = (void *)data + ihl;
-        // Bounds check: ensure UDP header fits within packet
-        if ((void *)uh + sizeof(struct udphdr) > data_end)
-            return 1;
-        key.src_port = bpf_ntohs(uh->source);
-        key.dst_port = bpf_ntohs(uh->dest);
-    }
-    else
-    {
-        return 1;
-    }
-
-    __u64 pkt_size = skb->len;
-
-    struct ip_value *v = bpf_map_lookup_elem(&ip_map, &key);
-    if (v)
-        __sync_fetch_and_add(&v->packet_size, pkt_size);
-    else
-    {
-        struct ip_value newv = {.packet_size = pkt_size};
-        bpf_map_update_elem(&ip_map, &key, &newv, BPF_ANY);
+    /* bind4 gives authoritative local tuple */
+    if(ctx->user_ip4 != 0) {
+        c->src_ip   = ctx->user_ip4;
+        c->src_port = bpf_ntohs(ctx->user_port);
+        c->have_src = 1;
     }
 
     return 1;
 }
 
-SEC("cgroup_skb/egress")
-int egress_connection_tracker(struct __sk_buff *skb)
+/* ============================================================
+ * connect4 — mark pod-originated connections
+ * ============================================================ */
+
+SEC("cgroup/connect4")
+int cg_connect4(struct bpf_sock_addr *ctx)
 {
-    return handle_socket_packet_ipv4(skb, 0); // 0 = egress
+    __u64 cookie = bpf_get_socket_cookie(ctx);
+
+    struct conn_val c = {};
+    c.cgroup_id      = bpf_get_current_cgroup_id();
+    c.conn_direction = CONN_POD_ORIGINATED;
+    c.proto          = IPPROTO_TCP;
+
+    bpf_map_update_elem(&conn_map, &cookie, &c, BPF_ANY);
+    return 1;
 }
+
+/* ============================================================
+ * ingress skb — RX accounting + external TCP detection
+ * ============================================================ */
 
 SEC("cgroup_skb/ingress")
-int ingress_connection_tracker(struct __sk_buff *skb)
+int cg_ingress(struct __sk_buff *skb)
 {
-    return handle_socket_packet_ipv4(skb, 1); // 1 = ingress
+    __u64 cookie = bpf_get_socket_cookie(skb);
+    struct conn_val *c = bpf_map_lookup_elem(&conn_map, &cookie);
+
+    struct conn_val pkt = {};
+    __u8 is_syn = 0;
+
+    if (parse_ipv4_tuple(skb, &pkt, &is_syn) < 0)
+        return 1;
+
+    /* External TCP connection: first ingress SYN */
+    if (!c && pkt.proto == IPPROTO_TCP && is_syn) {
+        pkt.cgroup_id      = bpf_skb_cgroup_id(skb);
+        pkt.conn_direction = CONN_EXTERNAL_ORIGINATED;
+        pkt.have_src       = 1;
+        pkt.have_dst       = 1;
+
+        bpf_map_update_elem(&conn_map, &cookie, &pkt, BPF_ANY);
+        c = &pkt;
+    }
+
+    /* UDP: learn tuple on first ingress packet */
+    if (!c && pkt.proto == IPPROTO_UDP) {
+        pkt.cgroup_id      = bpf_skb_cgroup_id(skb);
+        pkt.conn_direction = CONN_EXTERNAL_ORIGINATED;
+        pkt.have_src       = 1;
+        pkt.have_dst       = 1;
+
+        bpf_map_update_elem(&conn_map, &cookie, &pkt, BPF_ANY);
+        c = &pkt;
+    }
+
+    if (!c)
+        return 1;
+
+    /* Learn destination for pod-originated connections */
+    if (!c->have_dst) {
+        c->dst_ip   = pkt.dst_ip;
+        c->dst_port = pkt.dst_port;
+        c->have_dst = 1;
+    }
+
+    /* Learn source for pod-originated connections */
+    if (!c->have_src && c->conn_direction == CONN_POD_ORIGINATED) {
+        c->src_ip   = pkt.src_ip;
+        c->src_port = pkt.src_port;
+        c->have_src = 1;
+    }
+
+    __sync_fetch_and_add(&c->rx_bytes, skb->len);
+    return 1;
 }
 
-SEC("tcx/egress")
-int egress_tcx_connection_tracker(struct __sk_buff *skb)
+/* ============================================================
+ * egress skb — TX accounting + tuple completion
+ * ============================================================ */
+
+SEC("cgroup_skb/egress")
+int cg_egress(struct __sk_buff *skb)
 {
-    void *data = (void *)(long)skb->data;
-    void *data_end = (void *)(long)skb->data_end;
+    __u64 cookie = bpf_get_socket_cookie(skb);
+    struct conn_val *c = bpf_map_lookup_elem(&conn_map, &cookie);
+    if (!c)
+        return 1;
 
-    struct ethhdr *eth = data;
-    if ((void *)(eth + 1) > data_end)
-        return TC_ACT_OK;
+    struct conn_val pkt = {};
+    __u8 is_syn = 0;
 
-    if (bpf_ntohs(eth->h_proto) != ETH_P_IP)
-        return TC_ACT_OK;
+    if (parse_ipv4_tuple(skb, &pkt, &is_syn) < 0)
+        return 1;
 
-    struct iphdr *iph = (void *)(eth + 1);
-    if ((void *)(iph + 1) > data_end)
-        return TC_ACT_OK;
-
-    if (iph->version != 4)
-        return TC_ACT_OK;
-
-    __u32 ip_hdr_len = iph->ihl * 4;
-    if (ip_hdr_len < sizeof(*iph))
-        return TC_ACT_OK;
-
-    if ((void *)iph + ip_hdr_len > data_end)
-        return TC_ACT_OK;
-
-    if (iph->protocol != IPPROTO_TCP &&
-        iph->protocol != IPPROTO_UDP)
-        return TC_ACT_OK;
-
-    // Do not count if not a pod to service or service to pod
-    if ((iph->saddr & service_subnet_mask) != service_subnet_prefix || (iph->daddr & service_subnet_mask) != service_subnet_prefix)
-    {
-        return TC_ACT_OK;
+    /* Learn destination for pod-originated TCP/UDP */
+    if (!c->have_dst) {
+        c->dst_ip   = pkt.dst_ip;
+        c->dst_port = pkt.dst_port;
+        c->proto    = pkt.proto;
+        c->have_dst = 1;
     }
 
-    __u16 src_port = 0;
-    __u16 dst_port = 0;
-
-    if (iph->protocol == IPPROTO_TCP)
-    {
-        struct tcphdr *tcph = (void *)iph + ip_hdr_len;
-        if ((void *)(tcph + 1) > data_end)
-            return TC_ACT_OK;
-
-        src_port = bpf_ntohs(tcph->source);
-        dst_port = bpf_ntohs(tcph->dest);
-    }
-    else
-    {
-        struct udphdr *udph = (void *)iph + ip_hdr_len;
-        if ((void *)(udph + 1) > data_end)
-            return TC_ACT_OK;
-
-        src_port = bpf_ntohs(udph->source);
-        dst_port = bpf_ntohs(udph->dest);
+    /* UDP pod-originated without connect/bind */
+    if (pkt.proto == IPPROTO_UDP && !c->have_src) {
+        c->src_ip   = pkt.src_ip;
+        c->src_port = pkt.src_port;
+        c->proto    = pkt.proto;
+        c->have_src = 1;
     }
 
-    struct ip_key key = {};
-    key.cgroup_id = bpf_get_current_cgroup_id();
-    key.src_ip = iph->saddr;
-    key.dst_ip = iph->daddr;
-    key.src_port = src_port;
-    key.dst_port = dst_port;
-    key.direction = 0; /* egress */
-
-    struct ip_value *v = bpf_map_lookup_elem(&ip_map, &key);
-    if (v)
-    {
-        __sync_fetch_and_add(&v->packet_size, skb->len);
-    }
-    else
-    {
-        struct ip_value newv = {
-            .packet_size = skb->len,
-        };
-        bpf_map_update_elem(&ip_map, &key, &newv, BPF_ANY);
+    /* Learn source for pod-originated connections */
+    if (!c->have_src && c->conn_direction == CONN_POD_ORIGINATED) {
+        c->src_ip   = pkt.src_ip;
+        c->src_port = pkt.src_port;
+        c->have_src = 1;
     }
 
-    return TC_ACT_OK;
+    __sync_fetch_and_add(&c->tx_bytes, skb->len);
+    return 1;
 }

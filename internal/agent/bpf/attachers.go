@@ -12,10 +12,10 @@ import (
 	"golang.org/x/sys/unix"
 )
 
-func AttachRootCgroup(prg *ebpf.Program) (link.Link, error) {
+func AttachRootCgroup(prg *ebpf.Program, attachType ebpf.AttachType) (link.Link, error) {
 	cgroupIngressLink, err := link.AttachCgroup(link.CgroupOptions{
 		Path:    "/sys/fs/cgroup",
-		Attach:  ebpf.AttachCGroupInetIngress,
+		Attach:  attachType,
 		Program: prg,
 	})
 	if err != nil {

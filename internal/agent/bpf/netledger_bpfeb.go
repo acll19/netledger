@@ -13,20 +13,21 @@ import (
 	"github.com/cilium/ebpf"
 )
 
-type NetLedgerIpKey struct {
-	_         structs.HostLayout
-	CgroupId  uint64
-	SrcIp     uint32
-	DstIp     uint32
-	SrcPort   uint16
-	DstPort   uint16
-	Direction uint8
-	_         [3]byte
-}
-
-type NetLedgerIpValue struct {
-	_          structs.HostLayout
-	PacketSize uint64
+type NetLedgerConnVal struct {
+	_             structs.HostLayout
+	CgroupId      uint64
+	SrcIp         uint32
+	DstIp         uint32
+	SrcPort       uint16
+	DstPort       uint16
+	Proto         uint8
+	ConnDirection uint8
+	_             [2]byte
+	TxBytes       uint64
+	RxBytes       uint64
+	HaveSrc       uint8
+	HaveDst       uint8
+	_             [6]byte
 }
 
 // LoadNetLedger returns the embedded CollectionSpec for NetLedger.
@@ -71,24 +72,23 @@ type NetLedgerSpecs struct {
 //
 // It can be passed ebpf.CollectionSpec.Assign.
 type NetLedgerProgramSpecs struct {
-	EgressConnectionTracker    *ebpf.ProgramSpec `ebpf:"egress_connection_tracker"`
-	EgressTcxConnectionTracker *ebpf.ProgramSpec `ebpf:"egress_tcx_connection_tracker"`
-	IngressConnectionTracker   *ebpf.ProgramSpec `ebpf:"ingress_connection_tracker"`
+	CgBind4    *ebpf.ProgramSpec `ebpf:"cg_bind4"`
+	CgConnect4 *ebpf.ProgramSpec `ebpf:"cg_connect4"`
+	CgEgress   *ebpf.ProgramSpec `ebpf:"cg_egress"`
+	CgIngress  *ebpf.ProgramSpec `ebpf:"cg_ingress"`
 }
 
 // NetLedgerMapSpecs contains maps before they are loaded into the kernel.
 //
 // It can be passed ebpf.CollectionSpec.Assign.
 type NetLedgerMapSpecs struct {
-	IpMap *ebpf.MapSpec `ebpf:"ip_map"`
+	ConnMap *ebpf.MapSpec `ebpf:"conn_map"`
 }
 
 // NetLedgerVariableSpecs contains global variables before they are loaded into the kernel.
 //
 // It can be passed ebpf.CollectionSpec.Assign.
 type NetLedgerVariableSpecs struct {
-	ServiceSubnetMask   *ebpf.VariableSpec `ebpf:"service_subnet_mask"`
-	ServiceSubnetPrefix *ebpf.VariableSpec `ebpf:"service_subnet_prefix"`
 }
 
 // NetLedgerObjects contains all objects after they have been loaded into the kernel.
@@ -111,12 +111,12 @@ func (o *NetLedgerObjects) Close() error {
 //
 // It can be passed to LoadNetLedgerObjects or ebpf.CollectionSpec.LoadAndAssign.
 type NetLedgerMaps struct {
-	IpMap *ebpf.Map `ebpf:"ip_map"`
+	ConnMap *ebpf.Map `ebpf:"conn_map"`
 }
 
 func (m *NetLedgerMaps) Close() error {
 	return _NetLedgerClose(
-		m.IpMap,
+		m.ConnMap,
 	)
 }
 
@@ -124,24 +124,24 @@ func (m *NetLedgerMaps) Close() error {
 //
 // It can be passed to LoadNetLedgerObjects or ebpf.CollectionSpec.LoadAndAssign.
 type NetLedgerVariables struct {
-	ServiceSubnetMask   *ebpf.Variable `ebpf:"service_subnet_mask"`
-	ServiceSubnetPrefix *ebpf.Variable `ebpf:"service_subnet_prefix"`
 }
 
 // NetLedgerPrograms contains all programs after they have been loaded into the kernel.
 //
 // It can be passed to LoadNetLedgerObjects or ebpf.CollectionSpec.LoadAndAssign.
 type NetLedgerPrograms struct {
-	EgressConnectionTracker    *ebpf.Program `ebpf:"egress_connection_tracker"`
-	EgressTcxConnectionTracker *ebpf.Program `ebpf:"egress_tcx_connection_tracker"`
-	IngressConnectionTracker   *ebpf.Program `ebpf:"ingress_connection_tracker"`
+	CgBind4    *ebpf.Program `ebpf:"cg_bind4"`
+	CgConnect4 *ebpf.Program `ebpf:"cg_connect4"`
+	CgEgress   *ebpf.Program `ebpf:"cg_egress"`
+	CgIngress  *ebpf.Program `ebpf:"cg_ingress"`
 }
 
 func (p *NetLedgerPrograms) Close() error {
 	return _NetLedgerClose(
-		p.EgressConnectionTracker,
-		p.EgressTcxConnectionTracker,
-		p.IngressConnectionTracker,
+		p.CgBind4,
+		p.CgConnect4,
+		p.CgEgress,
+		p.CgIngress,
 	)
 }
 

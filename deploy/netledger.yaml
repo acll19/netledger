@@ -62,11 +62,9 @@ spec:
       hostPID: true
       dnsPolicy: ClusterFirstWithHostNet
       serviceAccountName: netledger-agent
-      imagePullSecrets:
-      - name: ghcr-secret
       containers:
       - name: netledger-agent
-        image: ghcr.io/acll19/kubenet/netledger-agent:v1
+        image: netledger-agent:v0.0.2
         imagePullPolicy: IfNotPresent
         args:
         # - -server=http://172.18.0.1:8080/write-network-statistics
@@ -149,11 +147,9 @@ spec:
         app.kubernetes.io/name: netledger
     spec:
       serviceAccountName: netledger-classifier
-      imagePullSecrets:
-      - name: ghcr-secret
       containers:
       - name: netledger-classifier
-        image: ghcr.io/acll19/kubenet/netledger-classifier:v1
+        image: netledger-classifer:v0.0.1
         imagePullPolicy: IfNotPresent
         ports:
         - containerPort: 8080

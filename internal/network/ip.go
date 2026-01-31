@@ -1,6 +1,7 @@
 package network
 
 import (
+	"encoding/binary"
 	"fmt"
 	"log"
 	"net"
@@ -58,12 +59,9 @@ func StringIpToNetIp(ip string) (net.IP, error) {
 }
 
 func Uint32ToIP(n uint32) net.IP {
-	return net.IPv4(
-		byte(n>>24),
-		byte(n>>16),
-		byte(n>>8),
-		byte(n),
-	)
+	b := make([]byte, 4)
+	binary.LittleEndian.PutUint32(b, n)
+	return net.IP(b)
 }
 
 // isInternetIP returns true if the IP is globally routable

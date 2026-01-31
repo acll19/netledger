@@ -253,23 +253,17 @@ func (s *Server) handlePayload(w http.ResponseWriter, r *http.Request) {
 		s.egStatistics)
 	s.mutex.Unlock()
 
-	for _, flowLog := range flowLogs {
-		log.Println(flowLog.Src,
-			"(",
-			flowLog.SrcIp,
-			")",
-			"from port",
-			flowLog.SrcPort,
-			"to",
-			flowLog.Dst,
-			"(",
-			flowLog.DstIP,
-			")",
-			"at port",
-			flowLog.DstPort,
-			"with",
-			strconv.Itoa(flowLog.Bytes),
-			"bytes")
+	for _, fl := range flowLogs {
+		log.Println(
+			"source",
+			fmt.Sprintf("%s(%s:%d)", fl.Src, fl.SrcIP, fl.SrcPort),
+			"destination",
+			fmt.Sprintf("%s(%s:%d)", fl.Dst, fl.DstIP, fl.DstPort),
+			"direction",
+			fl.Direction,
+			"bytes =",
+			strconv.Itoa(fl.Bytes),
+		)
 	}
 }
 

@@ -37,12 +37,15 @@ func Decode(data []byte) ([]FlowEntry, error) {
 }
 
 type FlowEntry struct {
-	SrcIP        string `json:"srcIp"`
-	DstIP        string `json:"dstIp"`
-	SrcPort      uint16 `json:"srcPort"`
-	DstPort      uint16 `json:"dstPort"`
-	Traffic      uint64 `json:"traffic"`
-	Direction    string `json:"direction"`
-	PodName      string `json:"podName"`
-	PodNamespace string `json:"podNamespace"`
+	SrcIP           string `json:"srcIp"`
+	DstIP           string `json:"dstIp"`
+	SrcPort         uint16 `json:"srcPort"`
+	DstPort         uint16 `json:"dstPort"`
+	TxBytes         uint64 `json:"txBytes"`
+	RxBytes         uint64 `json:"rxBytes"`
+	Direction       int    `json:"direction"`
+	SrcPodName      string `json:"srcPodName"`
+	SrcPodNamespace string `json:"srcPodNamespace"`
+	DstPodName      string `json:"dstPodName"`
+	DstPodNamespace string `json:"dstPodNamespace"`
 }
