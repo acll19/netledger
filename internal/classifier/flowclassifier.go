@@ -45,8 +45,8 @@ func Classify(data []payload.FlowEntry,
 		var srcZone, dstZone, srcRegion, dstRegion string
 		var srcParsed, dstParsed netip.Addr
 
-		srcPod, _ = searchPod(srcIp, podIpIndex)
-		dstPod, _ = searchPod(dstIp, podIpIndex)
+		srcPod, _ = searchPod(srcIp, entry, podIpIndex)
+		dstPod, _ = searchPod(dstIp, entry, podIpIndex)
 
 		srcPodInfo := podIndex[srcPod]
 		srcNode := srcPodInfo.Node
@@ -119,11 +119,20 @@ func Classify(data []payload.FlowEntry,
 	return flowLogs
 }
 
-func searchPod(ip string, podIpIndex map[uint32]metrics.PodKey) (metrics.PodKey, bool) {
+func searchPod(ip string, entry payload.FlowEntry, podIpIndex map[uint32]metrics.PodKey) (metrics.PodKey, bool) {
 	parsedIP, err := network.StringIpToNetIp(ip)
 	if err != nil {
 		return metrics.PodKey{}, false
 	}
 	pod, ok := podIpIndex[network.IpToUint32(parsedIP)]
+
+	if !ok {
+		if ip == entry.SrcIP && entry.SrcPodName != "" {
+			return metrics.PodKey{Name: entry.SrcPodName, Namespace: entry.SrcPodNamespace}, false
+		}
+		if ip == entry.DstIP && entry.DstPodName != "" {
+			return metrics.PodKey{Name: entry.DstPodName, Namespace: entry.DstPodNamespace}, false
+		}
+	}
 	return pod, ok
 }

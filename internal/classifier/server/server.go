@@ -75,7 +75,7 @@ func (s *Server) handlePod(obj any) {
 	// Get the host IP to check for hostNetwork pods
 	var hostIP uint32
 	if pod.Status.HostIP != "" {
-		parsedHostIP := net.ParseIP(pod.Status.HostIP)
+		parsedHostIP, _ := network.StringIpToNetIp(pod.Status.HostIP)
 		if parsedHostIP != nil && parsedHostIP.To4() != nil {
 			hostIP = network.IpToUint32(parsedHostIP)
 		}

@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/acll19/netledger/internal/agent/bpf"
+	"github.com/acll19/netledger/internal/agent/cgroup"
 	"github.com/acll19/netledger/internal/agent/kubernetes"
 	"github.com/acll19/netledger/internal/network"
 	"github.com/acll19/netledger/internal/network/byteorder"
@@ -178,12 +179,12 @@ func Run(flushInterval time.Duration, node, server, serviceCidr string, debug bo
 				srcIp := network.Uint32ToIP(fValues[i].SrcIp)
 				dstIp := network.Uint32ToIP(fValues[i].DstIp)
 				var srcPod, srcNs, dstPod, dstNs string
-				p := searchPodByIp(srcIp.To4().String(), podsOnHost)
+				p := searchPod(srcIp.To4().String(), fValues[i], podsOnHost)
 				if p != nil {
 					srcPod = p.Name
 					srcNs = p.Namespace
 				}
-				p = searchPodByIp(dstIp.To4().String(), podsOnHost)
+				p = searchPod(dstIp.To4().String(), fValues[i], podsOnHost)
 				if p != nil {
 					dstPod = p.Name
 					dstNs = p.Namespace
@@ -277,12 +278,28 @@ func filterSrcOrDstIpOnCurrentHost(keys []uint64, values []bpf.NetLedgerConnVal,
 	return resKeys, resValues
 }
 
-func searchPodByIp(ip string, podsOnHost []*v1.Pod) *v1.Pod {
+func searchPod(ip string, connVal bpf.NetLedgerConnVal, podsOnHost []*v1.Pod) *v1.Pod {
 	for _, pod := range podsOnHost {
 		for _, podIP := range pod.Status.PodIPs {
 			if ip == podIP.IP {
 				return pod
 			}
+		}
+	}
+
+	srcIp := network.Uint32ToIP(connVal.SrcIp)
+	if connVal.ConnDirection == 0 && srcIp.To4().String() == ip {
+		pod, _ := cgroup.GetPodByCgroupID(connVal.CgroupId, podsOnHost)
+		if pod != nil {
+			return pod
+		}
+	}
+
+	dstIp := network.Uint32ToIP(connVal.DstIp)
+	if connVal.ConnDirection == 1 && dstIp.To4().String() == ip {
+		pod, _ := cgroup.GetPodByCgroupID(connVal.CgroupId, podsOnHost)
+		if pod != nil {
+			return pod
 		}
 	}
 	return nil
