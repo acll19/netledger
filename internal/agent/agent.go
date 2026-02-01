@@ -95,7 +95,7 @@ func Run(flushInterval time.Duration, node, server, serviceCidr string, debug bo
 	// ifacesMap := make(map[int]net.Interface)
 	// al, m, err := bpf.AttachTcxToCiliumHostVeths(
 	// 	ifaces,
-	// 	objs.EgressTcxConnectionTracker,
+	// 	objs.TcxEgress,
 	// 	ebpf.AttachType(ebpf.AttachTCXEgress),
 	// )
 	// if err != nil {
@@ -105,7 +105,7 @@ func Run(flushInterval time.Duration, node, server, serviceCidr string, debug bo
 	// maps.Copy(ifacesMap, m)
 	// log.Println("Number of active links: ", len(activeLinks))
 
-	// done, err := bpf.ManageTCXLinks(ifacesMap, activeLinks, objs.IngressConnectionTracker, ebpf.AttachType(ebpf.AttachTCXEgress))
+	// done, err := bpf.ManageTCXLinks(ifacesMap, activeLinks, objs.TcxEgress, ebpf.AttachType(ebpf.AttachTCXEgress))
 	// if err != nil {
 	// 	return fmt.Errorf("subscribe to link updates: %w", err)
 	// }

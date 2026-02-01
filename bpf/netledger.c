@@ -9,11 +9,14 @@ char __license[] SEC("license") = "Dual MIT/GPL";
 #define IPPROTO_TCP 6
 #define IPPROTO_UDP 17
 
-#define TC_ACT_OK 0
+// #define TC_ACT_OK 0
 #define ETH_P_IP 0x0800
 
 #define CONN_POD_ORIGINATED      0
 #define CONN_EXTERNAL_ORIGINATED 1
+
+// volatile const __u32 service_subnet_prefix;
+// volatile const __u32 service_subnet_mask;
 
 /*
  * Keyed by socket cookie.
@@ -238,3 +241,52 @@ int cg_egress(struct __sk_buff *skb)
     __sync_fetch_and_add(&c->tx_bytes, skb->len);
     return 1;
 }
+
+// SEC("tcx/egress")
+// int tcx_egress(struct __sk_buff *skb)
+// {
+
+//     __u64 cookie = bpf_get_socket_cookie(skb);
+//     struct conn_val *c = bpf_map_lookup_elem(&conn_map, &cookie);
+//     if (!c)
+//         return 1;
+
+//     struct conn_val pkt = {};
+//     __u8 is_syn = 0;
+
+//     if (parse_ipv4_tuple(skb, &pkt, &is_syn) < 0)
+//         return TC_ACT_OK;
+
+//     // Do not count if not a pod to service or service to pod
+//     if ((pkt.src_ip & service_subnet_mask) != service_subnet_prefix || (pkt.dst_ip & service_subnet_mask) != service_subnet_prefix)
+//     {
+//         return TC_ACT_OK;
+//     }
+
+//     /* Learn destination for pod-originated TCP/UDP */
+//     if (!c->have_dst) {
+//         c->dst_ip   = pkt.dst_ip;
+//         c->dst_port = pkt.dst_port;
+//         c->proto    = pkt.proto;
+//         c->have_dst = 1;
+//     }
+
+//     /* UDP pod-originated without connect/bind */
+//     if (pkt.proto == IPPROTO_UDP && !c->have_src) {
+//         c->src_ip   = pkt.src_ip;
+//         c->src_port = pkt.src_port;
+//         c->proto    = pkt.proto;
+//         c->have_src = 1;
+//     }
+
+//     /* Learn source for pod-originated connections */
+//     if (!c->have_src && c->conn_direction == CONN_POD_ORIGINATED) {
+//         c->src_ip   = pkt.src_ip;
+//         c->src_port = pkt.src_port;
+//         c->have_src = 1;
+//     }
+
+//     __sync_fetch_and_add(&c->tx_bytes, skb->len);
+
+//     return TC_ACT_OK;
+// }

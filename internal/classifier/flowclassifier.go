@@ -69,8 +69,9 @@ func Classify(data []payload.FlowEntry,
 			SameRegion: srcRegion == dstRegion,
 		}
 
-		// Internal communication. Just take the egress side and invert values for ingress
-		if !isInternet && entry.Direction == 0 { // egress
+		// TODO: this works for in-cluster communication...
+		// TODO: do this only when pod-to-pod or pod-to-service
+		if !isInternet {
 			flowKey.PodName = srcPod.Name
 			flowKey.Namespace = srcPod.Namespace
 			currentFlow := egStatistics[flowKey]
