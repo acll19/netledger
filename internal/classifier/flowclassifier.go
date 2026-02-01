@@ -69,9 +69,7 @@ func Classify(data []payload.FlowEntry,
 			SameRegion: srcRegion == dstRegion,
 		}
 
-		// TODO: this works for in-cluster communication...
-		// TODO: do this only when pod-to-pod or pod-to-service
-		if !isInternet {
+		if !isInternet && srcPod.Name != "" && dstPod.Name != "" {
 			flowKey.PodName = srcPod.Name
 			flowKey.Namespace = srcPod.Namespace
 			currentFlow := egStatistics[flowKey]
