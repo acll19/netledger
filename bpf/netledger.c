@@ -58,7 +58,7 @@ struct
 
 struct
 {
-    __uint(type, BPF_MAP_TYPE_LRU_HASH);
+    __uint(type, BPF_MAP_TYPE_HASH);
     __uint(max_entries, 131072);
     __type(key, __u64); /* socket cookie */
     __type(value, struct conn_val);

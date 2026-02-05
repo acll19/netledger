@@ -296,8 +296,8 @@ func (s *Server) handleService(obj any) {
 		return
 	}
 
-	// we only want selector-less services
-	if len(svc.Spec.Selector) > 0 {
+	// we only want selector-less services that are not ExternalName
+	if len(svc.Spec.Selector) > 0 || svc.Spec.Type == v1.ServiceTypeExternalName {
 		return
 	}
 
