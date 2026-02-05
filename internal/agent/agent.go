@@ -166,25 +166,25 @@ func Run(flushInterval time.Duration, node, server, serviceCidr string, debug bo
 			keys = keys[:n]
 			values = values[:n]
 
-			svcCursor := new(ebpf.MapBatchCursor)
-			svcKeys := make([]uint64, size)
+			hCursor := new(ebpf.MapBatchCursor)
+			hKeys := make([]uint64, size)
 			hValues := make([]bpf.NetLedgerConnVal, size)
-			n2, err := objs.HostConnMap.BatchLookup(svcCursor, svcKeys, hValues, opts)
-			slog.Debug("svc batch lookup result", "n", n2, "err", err, "mapSize", objs.HostConnMap.MaxEntries())
+			n2, err := objs.HostConnMap.BatchLookup(hCursor, hKeys, hValues, opts)
+			slog.Debug("host batch lookup result", "n", n2, "err", err, "mapSize", objs.HostConnMap.MaxEntries())
 
 			podsOnHost := kubernetes.GetPods(informer)
 			fKeys, fValues := keys, values
 			// fKeys, fValues := filterSrcOrDstIpOnCurrentHost(keys, values, podsOnHost)
 
 			// debug
-			log.Println("svc keys count:", n2)
+			log.Println("host keys count:", n2)
 
 			// debug
 			log.Println("debug printing", len(fKeys), "keys", "started with", n, "keys before filtering to host-local pods (", len(keys), ")")
 			entries := make([]payload.FlowEntry, 0, len(fKeys))
 
 			// add every host-observed connections first
-			for i := range len(svcKeys) {
+			for i := range len(hKeys) {
 				if hValues[i].SrcIp > 0 && hValues[i].DstIp > 0 {
 					srcIp := network.Uint32ToIP(hValues[i].SrcIp)
 					dstIp := network.Uint32ToIP(hValues[i].DstIp)
