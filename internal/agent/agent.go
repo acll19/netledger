@@ -8,6 +8,7 @@ import (
 	"io"
 	"log"
 	"log/slog"
+	"maps"
 	"net"
 	"net/http"
 	"os"
@@ -44,21 +45,21 @@ func Run(flushInterval time.Duration, node, server, serviceCidr string, debug bo
 	}
 	defer objs.Close()
 
-	// ip, ipNet, err := net.ParseCIDR(serviceCidr)
-	// if err != nil || ip == nil || ip.To4() == nil {
-	// 	return fmt.Errorf("error parsing service CIDR, %w", err)
-	// }
+	ip, ipNet, err := net.ParseCIDR(serviceCidr)
+	if err != nil || ip == nil || ip.To4() == nil {
+		return fmt.Errorf("error parsing service CIDR, %w", err)
+	}
 
-	// ipUint := network.IpToUint32(ip)
-	// maskUint := network.MaskToUint32(ipNet.Mask)
+	ipUint := network.IpToUint32(ip)
+	maskUint := network.MaskToUint32(ipNet.Mask)
 
-	// if err := spec.Variables["service_subnet_prefix"].Set(byteorder.Htonl(ipUint)); err != nil {
-	// 	return fmt.Errorf("setting service prefix from CIDR: %w", err)
-	// }
+	if err := spec.Variables["service_subnet_prefix"].Set(byteorder.Htonl(ipUint)); err != nil {
+		return fmt.Errorf("setting service prefix from CIDR: %w", err)
+	}
 
-	// if err := spec.Variables["service_subnet_mask"].Set(byteorder.Htonl(maskUint)); err != nil {
-	// 	return fmt.Errorf("setting service mask from CIDR: %w", err)
-	// }
+	if err := spec.Variables["service_subnet_mask"].Set(byteorder.Htonl(maskUint)); err != nil {
+		return fmt.Errorf("setting service mask from CIDR: %w", err)
+	}
 
 	activeLinks := make([]link.Link, 0)
 	cgroupEgressLink, err := bpf.AttachRootCgroup(objs.CgEgress, ebpf.AttachCGroupInetEgress)
@@ -86,26 +87,26 @@ func Run(flushInterval time.Duration, node, server, serviceCidr string, debug bo
 	activeLinks = append(activeLinks, cgroupBindLink)
 
 	// TCX
-	// ifaces, err := network.ListCiliumVeths()
-	// if err != nil {
-	// 	return fmt.Errorf("failed to list cilium veths: %w", err)
-	// }
-	// activeLinks = append(activeLinks, cgroupIngressLink)
+	iface, err := network.GetHostEth0Interface()
+	if err != nil {
+		return fmt.Errorf("failed to list cilium veths: %w", err)
+	}
+	activeLinks = append(activeLinks, cgroupIngressLink)
 
-	// ifacesMap := make(map[int]net.Interface)
-	// al, m, err := bpf.AttachTcxToCiliumHostVeths(
-	// 	ifaces,
-	// 	objs.TcxEgress,
-	// 	ebpf.AttachType(ebpf.AttachTCXEgress),
-	// )
-	// if err != nil {
-	// 	return fmt.Errorf("attach tcx program to interface: %w", err)
-	// }
-	// activeLinks = append(activeLinks, al...)
-	// maps.Copy(ifacesMap, m)
-	// log.Println("Number of active links: ", len(activeLinks))
+	ifacesMap := make(map[int]net.Interface)
+	al, m, err := bpf.AttachTcxToCiliumHostVeths(
+		[]net.Interface{iface},
+		objs.TcEgress,
+		ebpf.AttachType(ebpf.AttachTCXEgress),
+	)
+	if err != nil {
+		return fmt.Errorf("attach tcx program to interface: %w", err)
+	}
+	activeLinks = append(activeLinks, al...)
+	maps.Copy(ifacesMap, m)
+	log.Println("Number of active links: ", len(activeLinks))
 
-	// done, err := bpf.ManageTCXLinks(ifacesMap, activeLinks, objs.TcxEgress, ebpf.AttachType(ebpf.AttachTCXEgress))
+	// done, err := bpf.ManageTCXLinks(ifacesMap, activeLinks, objs.TcxEgress, ebpf.AttachType(ebpf.AttachTCXIngress))
 	// if err != nil {
 	// 	return fmt.Errorf("subscribe to link updates: %w", err)
 	// }
@@ -165,19 +166,50 @@ func Run(flushInterval time.Duration, node, server, serviceCidr string, debug bo
 			keys = keys[:n]
 			values = values[:n]
 
+			svcCursor := new(ebpf.MapBatchCursor)
+			svcKeys := make([]uint64, size)
+			hValues := make([]bpf.NetLedgerConnVal, size)
+			n2, err := objs.HostConnMap.BatchLookup(svcCursor, svcKeys, hValues, opts)
+			slog.Debug("svc batch lookup result", "n", n2, "err", err, "mapSize", objs.HostConnMap.MaxEntries())
+
 			podsOnHost := kubernetes.GetPods(informer)
 			fKeys, fValues := keys, values
 			// fKeys, fValues := filterSrcOrDstIpOnCurrentHost(keys, values, podsOnHost)
 
 			// debug
+			log.Println("svc keys count:", n2)
+
+			// debug
 			log.Println("debug printing", len(fKeys), "keys", "started with", n, "keys before filtering to host-local pods (", len(keys), ")")
 			entries := make([]payload.FlowEntry, 0, len(fKeys))
+
+			// add every host-observed connections first
+			for i := range len(svcKeys) {
+				if hValues[i].SrcIp > 0 && hValues[i].DstIp > 0 {
+					srcIp := network.Uint32ToIP(hValues[i].SrcIp)
+					dstIp := network.Uint32ToIP(hValues[i].DstIp)
+
+					entry := payload.FlowEntry{
+						Direction:        int(hValues[i].ConnDirection),
+						SrcIP:            srcIp.To4().String(),
+						SrcPort:          hValues[i].SrcPort,
+						DstIP:            dstIp.To4().String(),
+						DstPort:          hValues[i].DstPort,
+						TxBytes:          hValues[i].TxBytes,
+						RxBytes:          hValues[i].RxBytes,
+						IsObservedInHost: int(hValues[i].IsObservedInHost),
+					}
+					entries = append(entries, entry)
+				}
+			}
+
 			for i := range len(fKeys) {
 				if fValues[i].HaveSrc == 0 || fValues[i].HaveDst == 0 {
 					continue
 				}
 				srcIp := network.Uint32ToIP(fValues[i].SrcIp)
 				dstIp := network.Uint32ToIP(fValues[i].DstIp)
+
 				var srcPod, srcNs, dstPod, dstNs string
 				p := searchPod(srcIp.To4().String(), fValues[i], podsOnHost)
 				if p != nil {

@@ -93,7 +93,7 @@ metadata:
   name: netledger-classifier
 rules:
 - apiGroups: [""]
-  resources: ["pods", "nodes"]
+  resources: ["pods", "nodes", "services"]
   verbs: ["watch", "list"]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
@@ -151,6 +151,8 @@ spec:
       - name: netledger-classifier
         image: netledger-classifer:v0.0.1
         imagePullPolicy: IfNotPresent
+        args:
+          - -serviceCidr=10.11.0.0/16
         ports:
         - containerPort: 8080
           name: http

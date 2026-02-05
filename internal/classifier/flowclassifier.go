@@ -2,6 +2,7 @@ package classifier
 
 import (
 	"fmt"
+	"net"
 	"net/netip"
 
 	"github.com/acll19/netledger/internal/classifier/metrics"
@@ -36,12 +37,29 @@ func Classify(data []payload.FlowEntry,
 	nodeIndex map[string]NodeInfo,
 	ingStatistics metrics.StatisticMap,
 	egStatistics metrics.StatisticMap,
+	svcIndex map[string][]string,
+	serviceIpNet *net.IPNet,
 ) []FlowLog {
 	flowLogs := make([]FlowLog, 0, len(data))
-	for _, entry := range data {
+	servicesToInternetIndex, cursor := createServicesToInternetIndex(data)
+
+	for i := cursor; i < len(data); i++ {
+		entry := data[i]
 		var srcPod, dstPod metrics.PodKey
 		srcIp := entry.SrcIP
 		dstIp := entry.DstIP
+		// check if dstIp is a service that talks to the internet
+		if ip, err := network.StringIpToNetIp(dstIp); err == nil && serviceIpNet.Contains(ip) {
+			if addrs, ok := svcIndex[dstIp]; ok {
+				for _, addr := range addrs {
+					if _, ok := servicesToInternetIndex[addr]; ok {
+						dstIp = addr
+						break
+					}
+				}
+			}
+		}
+
 		var srcZone, dstZone, srcRegion, dstRegion string
 		var srcParsed, dstParsed netip.Addr
 
@@ -60,7 +78,6 @@ func Classify(data []payload.FlowEntry,
 
 		srcParsed, _ = netip.ParseAddr(srcIp)
 		dstParsed, _ = netip.ParseAddr(dstIp)
-
 		isInternet := network.IsInternetIP(srcParsed) || network.IsInternetIP(dstParsed)
 
 		flowKey := metrics.FlowKey{
@@ -83,9 +100,13 @@ func Classify(data []payload.FlowEntry,
 			ingStatistics[flowKey] = metrics.FlowSize{
 				Traffic: entry.RxBytes + currentFlow.Traffic,
 			}
-		}
-
-		if isInternet {
+		} else {
+			// This could be
+			// - internet,
+			// - pod to svc typed ExternalName,
+			// - pod to svc without selectors with endpoint slices to public IPs,
+			// - external initiated requests to pod,
+			// - etc.
 			switch entry.Direction {
 			case 0: // egress
 				flowKey.PodName = srcPod.Name
@@ -94,12 +115,23 @@ func Classify(data []payload.FlowEntry,
 				egStatistics[flowKey] = metrics.FlowSize{
 					Traffic: entry.TxBytes + currentFlow.Traffic,
 				}
+
+				// we count RX for the same pod
+				currentFlow = ingStatistics[flowKey]
+				ingStatistics[flowKey] = metrics.FlowSize{
+					Traffic: entry.RxBytes + currentFlow.Traffic,
+				}
 			case 1: // ingress
 				flowKey.PodName = dstPod.Name
 				flowKey.Namespace = dstPod.Namespace
 				currentFlow := ingStatistics[flowKey]
 				ingStatistics[flowKey] = metrics.FlowSize{
 					Traffic: entry.RxBytes + currentFlow.Traffic,
+				}
+
+				currentFlow = egStatistics[flowKey]
+				egStatistics[flowKey] = metrics.FlowSize{
+					Traffic: entry.TxBytes + currentFlow.Traffic,
 				}
 			}
 		}
@@ -116,6 +148,24 @@ func Classify(data []payload.FlowEntry,
 		})
 	}
 	return flowLogs
+}
+
+func createServicesToInternetIndex(data []payload.FlowEntry) (map[string]struct{}, int) {
+	servicesToInternetIndex := make(map[string]struct{}, len(data))
+	cursor := 0
+	for cursor < len(data) {
+		d := data[cursor]
+		if d.IsObservedInHost != 1 {
+			break
+		}
+
+		dstIp, _ := netip.ParseAddr(d.DstIP)
+		if network.IsInternetIP(dstIp) {
+			servicesToInternetIndex[d.DstIP] = struct{}{}
+		}
+		cursor++
+	}
+	return servicesToInternetIndex, cursor
 }
 
 func searchPod(ip string, entry payload.FlowEntry, podIpIndex map[uint32]metrics.PodKey) (metrics.PodKey, bool) {

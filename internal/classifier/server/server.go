@@ -1,13 +1,16 @@
 package server
 
 import (
+	"context"
 	"fmt"
 	"io"
 	"log"
 	"net"
 	"net/http"
+	"net/netip"
 	"strconv"
 	"sync"
+	"time"
 
 	"github.com/acll19/netledger/internal/classifier"
 	"github.com/acll19/netledger/internal/classifier/metrics"
@@ -17,41 +20,75 @@ import (
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	v1 "k8s.io/api/core/v1"
 	"k8s.io/client-go/kubernetes"
+	"k8s.io/client-go/tools/cache"
 
 	classifierK8s "github.com/acll19/netledger/internal/classifier/kubernetes"
 )
 
 type Server struct {
-	clientset     *kubernetes.Clientset
-	podIpIndex    map[uint32]metrics.PodKey // maps Pod IPv4s to Pod name
-	nodeIpIndex   map[uint32]string         // maps Node IPv4s to Node name (for hostNetwork pods)
-	podIndex      map[metrics.PodKey]classifier.PodInfo
-	nodeIndex     map[string]classifier.NodeInfo
-	ingStatistics metrics.StatisticMap
-	egStatistics  metrics.StatisticMap
-	mutex         sync.RWMutex
+	clientset          *kubernetes.Clientset
+	podIpIndex         map[uint32]metrics.PodKey // maps Pod IPv4s to Pod name
+	nodeIpIndex        map[uint32]string         // maps Node IPv4s to Node name (for hostNetwork pods)
+	podIndex           map[metrics.PodKey]classifier.PodInfo
+	nodeIndex          map[string]classifier.NodeInfo
+	svcToPublicIpIndex map[string][]string // maps service IP to external IPs (for selector-less services with endpoint slice to public IP)
+	ingStatistics      metrics.StatisticMap
+	egStatistics       metrics.StatisticMap
+	epSliceInformer    cache.SharedIndexInformer
+	serviceIpNet       *net.IPNet
+	mutex              sync.RWMutex
 }
 
-func NewServer(clientset *kubernetes.Clientset) *Server {
+func NewServer(clientset *kubernetes.Clientset, epSliceInformer cache.SharedIndexInformer, serviceIpNet *net.IPNet) *Server {
 	server := &Server{
-		clientset:     clientset,
-		podIpIndex:    map[uint32]metrics.PodKey{},
-		nodeIpIndex:   map[uint32]string{},
-		podIndex:      map[metrics.PodKey]classifier.PodInfo{},
-		nodeIndex:     map[string]classifier.NodeInfo{},
-		ingStatistics: metrics.StatisticMap{},
-		egStatistics:  metrics.StatisticMap{},
+		clientset:          clientset,
+		epSliceInformer:    epSliceInformer,
+		serviceIpNet:       serviceIpNet,
+		podIpIndex:         map[uint32]metrics.PodKey{},
+		nodeIpIndex:        map[uint32]string{},
+		podIndex:           map[metrics.PodKey]classifier.PodInfo{},
+		nodeIndex:          map[string]classifier.NodeInfo{},
+		ingStatistics:      metrics.StatisticMap{},
+		egStatistics:       metrics.StatisticMap{},
+		svcToPublicIpIndex: map[string][]string{},
 	}
 	return server
 }
 
-func (s *Server) Start(reg *prometheus.Registry) {
-	http.Handle("/metrics", instrumentHandler(reg, "metrics", promhttp.HandlerFor(reg, promhttp.HandlerOpts{})))
-	http.Handle("/write-network-statistics", instrumentHandler(reg, "write_statistics", http.HandlerFunc(s.handlePayload)))
-	log.Println("Starting server on port 8080...")
-	if err := http.ListenAndServe(":8080", nil); err != nil {
-		log.Fatalf("Failed to start server: %v", err)
+func (s *Server) Start(ctx context.Context, reg *prometheus.Registry) error {
+	mux := http.NewServeMux()
+	mux.Handle("/metrics",
+		instrumentHandler(reg, "metrics",
+			promhttp.HandlerFor(reg, promhttp.HandlerOpts{}),
+		),
+	)
+	mux.Handle("/write-network-statistics",
+		instrumentHandler(reg, "write_statistics",
+			http.HandlerFunc(s.handlePayload),
+		),
+	)
+
+	server := &http.Server{
+		Addr:    ":8080",
+		Handler: mux,
 	}
+
+	go func() {
+		log.Println("Starting server on port 8080...")
+		if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+			log.Fatalf("HTTP server error: %v", err)
+		}
+	}()
+
+	// Block until SIGTERM
+	<-ctx.Done()
+	log.Println("Shutdown signal received")
+
+	// Give outstanding requests time to finish
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	return server.Shutdown(shutdownCtx)
 }
 
 func (s *Server) WatchPods() {
@@ -60,6 +97,10 @@ func (s *Server) WatchPods() {
 
 func (s *Server) WatchNodes() {
 	classifierK8s.WatchNodes(s.clientset, s.onNodeAdd, s.onNodeDelete, s.onNodeUpdate)
+}
+
+func (s *Server) WatchServices() {
+	classifierK8s.WatchServices(s.clientset, s.onServiceAdd, s.onServiceDelete, s.onServiceUpdate)
 }
 
 func (s *Server) onPodAdd(obj any) {
@@ -225,6 +266,70 @@ func (s *Server) onNodeDelete(obj any) {
 	log.Printf("Node deleted: %s", node.Name)
 }
 
+func (s *Server) onServiceAdd(obj any) {
+	s.handleService(obj)
+}
+
+func (s *Server) onServiceDelete(obj any) {
+	svc, ok := obj.(*v1.Service)
+	if !ok {
+		return
+	}
+
+	// we only want selector-less services
+	if len(svc.Spec.Selector) > 0 {
+		return
+	}
+
+	s.mutex.Lock()
+	delete(s.svcToPublicIpIndex, svc.Spec.ClusterIP)
+	s.mutex.Unlock()
+}
+
+func (s *Server) onServiceUpdate(oldObj, newObj any) {
+	s.handleService(newObj)
+}
+
+func (s *Server) handleService(obj any) {
+	svc, ok := obj.(*v1.Service)
+	if !ok {
+		return
+	}
+
+	// we only want selector-less services
+	if len(svc.Spec.Selector) > 0 {
+		return
+	}
+
+	epSlices := classifierK8s.GetEndpointSlices(s.epSliceInformer)
+
+	addresses := make([]string, 0)
+	for _, ep := range epSlices {
+		if ep.Labels["kubernetes.io/service-name"] == svc.Name {
+			for _, epAddr := range ep.Endpoints {
+				for _, addr := range epAddr.Addresses {
+					parsedIp, err := netip.ParseAddr(addr)
+					if err != nil {
+						log.Printf("Failed to parse IP address %s: %v", addr, err)
+						continue
+					}
+					// we only care about internet bound connections
+					if network.IsInternetIP(parsedIp) {
+						addresses = append(addresses, addr)
+					}
+				}
+			}
+		}
+	}
+
+	if len(addresses) > 0 {
+		s.mutex.Lock()
+		s.svcToPublicIpIndex[svc.Spec.ClusterIP] = addresses
+		s.mutex.Unlock()
+	}
+
+}
+
 func (s *Server) handlePayload(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "Invalid request method", http.StatusMethodNotAllowed)
@@ -250,7 +355,10 @@ func (s *Server) handlePayload(w http.ResponseWriter, r *http.Request) {
 		s.podIpIndex,
 		s.nodeIndex,
 		s.ingStatistics,
-		s.egStatistics)
+		s.egStatistics,
+		s.svcToPublicIpIndex,
+		s.serviceIpNet,
+	)
 	s.mutex.Unlock()
 
 	for _, fl := range flowLogs {
