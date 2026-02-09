@@ -78,6 +78,7 @@ type NetLedgerProgramSpecs struct {
 	CgEgress   *ebpf.ProgramSpec `ebpf:"cg_egress"`
 	CgIngress  *ebpf.ProgramSpec `ebpf:"cg_ingress"`
 	TcEgress   *ebpf.ProgramSpec `ebpf:"tc_egress"`
+	TcIngress  *ebpf.ProgramSpec `ebpf:"tc_ingress"`
 }
 
 // NetLedgerMapSpecs contains maps before they are loaded into the kernel.
@@ -144,6 +145,7 @@ type NetLedgerPrograms struct {
 	CgEgress   *ebpf.Program `ebpf:"cg_egress"`
 	CgIngress  *ebpf.Program `ebpf:"cg_ingress"`
 	TcEgress   *ebpf.Program `ebpf:"tc_egress"`
+	TcIngress  *ebpf.Program `ebpf:"tc_ingress"`
 }
 
 func (p *NetLedgerPrograms) Close() error {
@@ -153,6 +155,7 @@ func (p *NetLedgerPrograms) Close() error {
 		p.CgEgress,
 		p.CgIngress,
 		p.TcEgress,
+		p.TcIngress,
 	)
 }
 

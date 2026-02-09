@@ -7,7 +7,6 @@ import (
 	"log"
 	"net"
 	"net/http"
-	"net/netip"
 	"strconv"
 	"sync"
 	"time"
@@ -19,6 +18,7 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	v1 "k8s.io/api/core/v1"
+	discovery "k8s.io/api/discovery/v1"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/tools/cache"
 
@@ -26,31 +26,33 @@ import (
 )
 
 type Server struct {
-	clientset          *kubernetes.Clientset
-	podIpIndex         map[uint32]metrics.PodKey // maps Pod IPv4s to Pod name
-	nodeIpIndex        map[uint32]string         // maps Node IPv4s to Node name (for hostNetwork pods)
-	podIndex           map[metrics.PodKey]classifier.PodInfo
-	nodeIndex          map[string]classifier.NodeInfo
-	svcToPublicIpIndex map[string][]string // maps service IP to external IPs (for selector-less services with endpoint slice to public IP)
-	ingStatistics      metrics.StatisticMap
-	egStatistics       metrics.StatisticMap
-	epSliceInformer    cache.SharedIndexInformer
-	serviceIpNet       *net.IPNet
-	mutex              sync.RWMutex
+	clientset       *kubernetes.Clientset
+	podIpIndex      map[uint32]metrics.PodKey // maps Pod IPv4s to Pod name
+	nodeIpIndex     map[uint32]string         // maps Node IPv4s to Node name (for hostNetwork pods)
+	podIndex        map[metrics.PodKey]classifier.PodInfo
+	nodeIndex       map[string]classifier.NodeInfo
+	svcIndex        map[classifierK8s.ServiceKey]classifierK8s.ServiceInfo
+	ingStatistics   metrics.StatisticMap
+	egStatistics    metrics.StatisticMap
+	svcInformer     cache.SharedIndexInformer
+	epSliceInformer cache.SharedIndexInformer
+	serviceIpNet    *net.IPNet
+	mutex           sync.RWMutex
 }
 
-func NewServer(clientset *kubernetes.Clientset, epSliceInformer cache.SharedIndexInformer, serviceIpNet *net.IPNet) *Server {
+func NewServer(clientset *kubernetes.Clientset, svcInformer, epSliceInformer cache.SharedIndexInformer, serviceIpNet *net.IPNet) *Server {
 	server := &Server{
-		clientset:          clientset,
-		epSliceInformer:    epSliceInformer,
-		serviceIpNet:       serviceIpNet,
-		podIpIndex:         map[uint32]metrics.PodKey{},
-		nodeIpIndex:        map[uint32]string{},
-		podIndex:           map[metrics.PodKey]classifier.PodInfo{},
-		nodeIndex:          map[string]classifier.NodeInfo{},
-		ingStatistics:      metrics.StatisticMap{},
-		egStatistics:       metrics.StatisticMap{},
-		svcToPublicIpIndex: map[string][]string{},
+		clientset:       clientset,
+		svcInformer:     svcInformer,
+		epSliceInformer: epSliceInformer,
+		serviceIpNet:    serviceIpNet,
+		podIpIndex:      map[uint32]metrics.PodKey{},
+		nodeIpIndex:     map[uint32]string{},
+		podIndex:        map[metrics.PodKey]classifier.PodInfo{},
+		nodeIndex:       map[string]classifier.NodeInfo{},
+		ingStatistics:   metrics.StatisticMap{},
+		egStatistics:    metrics.StatisticMap{},
+		svcIndex:        map[classifierK8s.ServiceKey]classifierK8s.ServiceInfo{},
 	}
 	return server
 }
@@ -93,14 +95,6 @@ func (s *Server) Start(ctx context.Context, reg *prometheus.Registry) error {
 
 func (s *Server) WatchPods() {
 	classifierK8s.WatchPods(s.clientset, s.onPodAdd, s.onPodDelete, s.onPodUpdate)
-}
-
-func (s *Server) WatchNodes() {
-	classifierK8s.WatchNodes(s.clientset, s.onNodeAdd, s.onNodeDelete, s.onNodeUpdate)
-}
-
-func (s *Server) WatchServices() {
-	classifierK8s.WatchServices(s.clientset, s.onServiceAdd, s.onServiceDelete, s.onServiceUpdate)
 }
 
 func (s *Server) onPodAdd(obj any) {
@@ -211,6 +205,10 @@ func (s *Server) onPodDelete(obj any) {
 	s.mutex.Unlock()
 }
 
+func (s *Server) WatchNodes() {
+	classifierK8s.WatchNodes(s.clientset, s.onNodeAdd, s.onNodeDelete, s.onNodeUpdate)
+}
+
 func (s *Server) onNodeAdd(obj any) {
 	node, ok := obj.(*v1.Node)
 	if !ok {
@@ -266,6 +264,10 @@ func (s *Server) onNodeDelete(obj any) {
 	log.Printf("Node deleted: %s", node.Name)
 }
 
+func (s *Server) WatchServices() {
+	classifierK8s.WatchServices(s.clientset, s.onServiceAdd, s.onServiceDelete, s.onServiceUpdate)
+}
+
 func (s *Server) onServiceAdd(obj any) {
 	s.handleService(obj)
 }
@@ -276,13 +278,16 @@ func (s *Server) onServiceDelete(obj any) {
 		return
 	}
 
-	// we only want selector-less services
-	if len(svc.Spec.Selector) > 0 {
-		return
+	var svcKey string
+	for key, svcInfo := range s.svcIndex {
+		if svcInfo.Name == svc.Name {
+			svcKey = key
+			break
+		}
 	}
 
 	s.mutex.Lock()
-	delete(s.svcToPublicIpIndex, svc.Spec.ClusterIP)
+	delete(s.svcIndex, svcKey)
 	s.mutex.Unlock()
 }
 
@@ -296,38 +301,114 @@ func (s *Server) handleService(obj any) {
 		return
 	}
 
-	// we only want selector-less services that are not ExternalName
-	if len(svc.Spec.Selector) > 0 || svc.Spec.Type == v1.ServiceTypeExternalName {
+	key, svcInfo := classifierK8s.NewServiceInfp(svc)
+	if svcInfo.Name == "None" || svcInfo.Name == "" {
 		return
 	}
 
-	epSlices := classifierK8s.GetEndpointSlices(s.epSliceInformer)
-
-	addresses := make([]string, 0)
-	for _, ep := range epSlices {
-		if ep.Labels["kubernetes.io/service-name"] == svc.Name {
-			for _, epAddr := range ep.Endpoints {
-				for _, addr := range epAddr.Addresses {
-					parsedIp, err := netip.ParseAddr(addr)
-					if err != nil {
-						log.Printf("Failed to parse IP address %s: %v", addr, err)
-						continue
-					}
-					// we only care about internet bound connections
-					if network.IsInternetIP(parsedIp) {
-						addresses = append(addresses, addr)
-					}
+	eps := classifierK8s.GetEndpointSlices(s.epSliceInformer)
+	for _, ep := range eps {
+		svcName := ep.Labels["kubernetes.io/service-name"]
+		if svcName == svc.Name && ep.Namespace == svc.Namespace {
+			addresses := make([]string, 0)
+			for _, e := range ep.Endpoints {
+				for _, addr := range e.Addresses {
+					addresses = append(addresses, addr)
 				}
 			}
+			svcInfo.Backends = addresses
+			break
 		}
 	}
 
-	if len(addresses) > 0 {
-		s.mutex.Lock()
-		s.svcToPublicIpIndex[svc.Spec.ClusterIP] = addresses
-		s.mutex.Unlock()
+	s.mutex.Lock()
+	s.svcIndex[key] = svcInfo
+	s.mutex.Unlock()
+}
+
+func (s *Server) WatchEndpointSlices() {
+	classifierK8s.WatchEndpointSlices(s.clientset, s.onEndpointSliceAdd, s.onEndpointSliceDelete, s.onEndpointSliceUpdate)
+}
+
+func (s *Server) onEndpointSliceAdd(obj any) {
+	s.handleEndpointSlice(obj)
+}
+
+func (s *Server) onEndpointSliceDelete(obj any) {
+	eps, ok := obj.(*discovery.EndpointSlice)
+	if !ok {
+		return
 	}
 
+	svcName := eps.Labels["kubernetes.io/service-name"]
+	if svcName == "" {
+		return
+	}
+
+	var svc classifierK8s.ServiceInfo
+	var svcKey string
+	for key, svcInfo := range s.svcIndex {
+		if svcInfo.Name == svcName {
+			svc = s.svcIndex[key]
+			svcKey = key
+			break
+		}
+	}
+
+	epsToDelete := make(map[string]struct{}, len(svc.Backends))
+	for _, ep := range eps.Endpoints {
+		for _, addr := range ep.Addresses {
+			epsToDelete[addr] = struct{}{}
+		}
+	}
+
+	updatedEndpoints := svc.Backends[:0]
+	for _, b := range svc.Backends {
+		if _, found := epsToDelete[b]; !found {
+			updatedEndpoints = append(updatedEndpoints, b)
+		}
+	}
+
+	svc.Backends = updatedEndpoints
+
+	s.mutex.Lock()
+	s.svcIndex[svcKey] = svc
+	s.mutex.Unlock()
+}
+
+func (s *Server) onEndpointSliceUpdate(oldObj, newObj any) {
+	s.handleEndpointSlice(newObj)
+}
+
+func (s *Server) handleEndpointSlice(obj any) {
+	eps, ok := obj.(*discovery.EndpointSlice)
+	if !ok {
+		return
+	}
+
+	svcName := eps.Labels["kubernetes.io/service-name"]
+	if svcName == "" {
+		return
+	}
+
+	for key, svcInfo := range s.svcIndex {
+		if svcInfo.Name == svcName {
+			backends := make([]string, 0)
+			for _, ep := range eps.Endpoints {
+				for _, addr := range ep.Addresses {
+					backends = append(backends, addr)
+				}
+			}
+			svc := s.svcIndex[key]
+			svc.Backends = append(svc.Backends, backends...)
+
+			s.mutex.Lock()
+			s.svcIndex[key] = svc
+			s.mutex.Unlock()
+
+			break
+		}
+	}
 }
 
 func (s *Server) handlePayload(w http.ResponseWriter, r *http.Request) {
@@ -356,7 +437,7 @@ func (s *Server) handlePayload(w http.ResponseWriter, r *http.Request) {
 		s.nodeIndex,
 		s.ingStatistics,
 		s.egStatistics,
-		s.svcToPublicIpIndex,
+		s.svcIndex,
 		s.serviceIpNet,
 	)
 	s.mutex.Unlock()

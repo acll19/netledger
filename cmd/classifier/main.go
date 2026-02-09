@@ -32,20 +32,26 @@ func main() {
 	)
 	defer stop()
 
-	epSliceInf, err := classifierK8s.SetupEndpointSlicesInformer(ctx, clientset)
+	svcInformer, err := classifierK8s.SetupServicesInformer(ctx, clientset)
 	if err != nil {
-		log.Printf("Error initializing endpoint slice informer: %v", err)
+		log.Printf("Error initializing service informer: %v", err)
+	}
+
+	epSliceInformer, err := classifierK8s.SetupEndpointSlicesInformer(ctx, clientset)
+	if err != nil {
+		log.Printf("Error initializing endpoint slice informer %v", err)
 	}
 
 	_, ipNet, err := net.ParseCIDR(serviceCidr)
 	if err != nil {
 		log.Fatalf("Error parsing service CIDR: %v", err)
 	}
-	server := server.NewServer(clientset, epSliceInf, ipNet)
+	server := server.NewServer(clientset, svcInformer, epSliceInformer, ipNet)
 
 	go server.WatchPods()
 	go server.WatchNodes()
 	go server.WatchServices()
+	go server.WatchEndpointSlices()
 
 	reg := prometheus.NewRegistry()
 	reg.MustRegister(server)

@@ -69,12 +69,27 @@ struct
  * ============================================================ */
 
 /* Parse IPv4 + L4 headers and fill tuple */
-static __always_inline int parse_ipv4_tuple(struct __sk_buff *skb, struct conn_val *c, __u8 *is_tcp_syn)
+static __always_inline int parse_ipv4_tuple(struct __sk_buff *skb,
+                                            struct conn_val *c,
+                                            __u8 *is_tcp_syn)
 {
     void *data = (void *)(long)skb->data;
     void *data_end = (void *)(long)skb->data_end;
+    void *cursor = data;
 
-    struct iphdr *iph = data;
+    /* Optional Ethernet header */
+    struct ethhdr *eth = cursor;
+    if ((void *)eth + sizeof(*eth) <= data_end)
+    {
+        /* ETH_P_IP is big-endian on the wire */
+        if (eth->h_proto == bpf_htons(ETH_P_IP))
+        {
+            cursor += sizeof(*eth);
+        }
+    }
+
+    /* IPv4 header */
+    struct iphdr *iph = cursor;
     if ((void *)iph + sizeof(*iph) > data_end)
         return -1;
 
@@ -85,9 +100,14 @@ static __always_inline int parse_ipv4_tuple(struct __sk_buff *skb, struct conn_v
     c->dst_ip = iph->daddr;
     c->proto = iph->protocol;
 
+    cursor += iph->ihl * 4;
+    if (cursor > data_end)
+        return -1;
+
+    /* TCP */
     if (iph->protocol == IPPROTO_TCP)
     {
-        struct tcphdr *th = data + iph->ihl * 4;
+        struct tcphdr *th = cursor;
         if ((void *)th + sizeof(*th) > data_end)
             return -1;
 
@@ -97,9 +117,10 @@ static __always_inline int parse_ipv4_tuple(struct __sk_buff *skb, struct conn_v
         return 0;
     }
 
+    /* UDP */
     if (iph->protocol == IPPROTO_UDP)
     {
-        struct udphdr *uh = data + iph->ihl * 4;
+        struct udphdr *uh = cursor;
         if ((void *)uh + sizeof(*uh) > data_end)
             return -1;
 
@@ -111,7 +132,6 @@ static __always_inline int parse_ipv4_tuple(struct __sk_buff *skb, struct conn_v
 
     return -1;
 }
-
 /* ============================================================
  * bind4 — learn local (source) tuple for pod-originated
  * ============================================================ */
@@ -265,48 +285,17 @@ int cg_egress(struct __sk_buff *skb)
     return 1;
 }
 
+/* ============================================================
+*  tc egress - TX accounting + tuple completion
+*  ============================================================ */
+
 SEC("tc/egress")
 int tc_egress(struct __sk_buff *skb)
 {
     struct conn_val pkt = {};
+    __u8 is_syn = 0;
 
-    // TC layer includes Ethernet header (14 bytes), need to skip it
-    void *data = (void *)(long)skb->data;
-    void *data_end = (void *)(long)skb->data_end;
-    
-    // Skip Ethernet header
-    struct iphdr *iph = data + 14;
-    if ((void *)iph + sizeof(*iph) > data_end)
-        return TC_ACT_OK;
-    
-    if (iph->version != 4)
-        return TC_ACT_OK;
-
-    pkt.src_ip = iph->saddr;
-    pkt.dst_ip = iph->daddr;
-    pkt.proto = iph->protocol;
-
-    // Parse L4 headers
-    if (iph->protocol == IPPROTO_TCP)
-    {
-        struct tcphdr *th = (void *)iph + iph->ihl * 4;
-        if ((void *)th + sizeof(*th) > data_end)
-            return TC_ACT_OK;
-        pkt.src_port = bpf_ntohs(th->source);
-        pkt.dst_port = bpf_ntohs(th->dest);
-    }
-    else if (iph->protocol == IPPROTO_UDP)
-    {
-        struct udphdr *uh = (void *)iph + iph->ihl * 4;
-        if ((void *)uh + sizeof(*uh) > data_end)
-            return TC_ACT_OK;
-        pkt.src_port = bpf_ntohs(uh->source);
-        pkt.dst_port = bpf_ntohs(uh->dest);
-    }
-    else
-        return TC_ACT_OK;
-
-    if (pkt.src_ip == 0 || pkt.dst_ip == 0)
+    if (parse_ipv4_tuple(skb, &pkt, &is_syn) < 0)
         return TC_ACT_OK;
 
     __u64 cookie = bpf_get_socket_cookie(skb);
@@ -341,6 +330,72 @@ int tc_egress(struct __sk_buff *skb)
     }
 
     __sync_fetch_and_add(&d->tx_bytes, skb->len);
+
+    return TC_ACT_OK;
+}
+
+/* ============================================================
+ * tc ingress — RX accounting + external TCP detection
+ * ============================================================ */
+
+SEC("tc/ingress")
+int tc_ingress(struct __sk_buff *skb)
+{
+    struct conn_val pkt = {};
+    __u8 is_syn = 0;
+
+    if (parse_ipv4_tuple(skb, &pkt, &is_syn) < 0)
+        return TC_ACT_OK;
+
+    __u64 cookie = bpf_get_socket_cookie(skb);
+    struct conn_val *c = bpf_map_lookup_elem(&host_conn_map, &cookie);
+
+    /* External TCP connection: first ingress SYN */
+    if (!c && pkt.proto == IPPROTO_TCP && is_syn)
+    {
+        pkt.cgroup_id = bpf_skb_cgroup_id(skb);
+        pkt.conn_direction = CONN_EXTERNAL_ORIGINATED;
+        pkt.is_observed_in_host = 1;
+        pkt.have_src = 1;
+        pkt.have_dst = 1;
+
+        bpf_map_update_elem(&host_conn_map, &cookie, &pkt, BPF_ANY);
+        c = &pkt;
+    }
+
+    /* UDP: learn tuple on first ingress packet */
+    if (!c && pkt.proto == IPPROTO_UDP)
+    {
+        pkt.cgroup_id = bpf_skb_cgroup_id(skb);
+        pkt.conn_direction = CONN_EXTERNAL_ORIGINATED;
+        pkt.is_observed_in_host = 1;
+        pkt.have_src = 1;
+        pkt.have_dst = 1;
+
+        bpf_map_update_elem(&host_conn_map, &cookie, &pkt, BPF_ANY);
+        c = &pkt;
+    }
+
+    if (!c)
+        return TC_ACT_OK;
+
+    /* Learn destination for pod-originated connections */
+    if (!c->have_dst)
+    {
+        c->dst_ip = pkt.dst_ip;
+        c->dst_port = pkt.dst_port;
+        c->have_dst = 1;
+    }
+
+    /* Learn source for pod-originated connections */
+    if (!c->have_src && c->conn_direction == CONN_POD_ORIGINATED)
+    {
+        c->src_ip = pkt.src_ip;
+        c->src_port = pkt.src_port;
+        c->have_src = 1;
+    }
+
+    __sync_fetch_and_add(&c->rx_bytes, skb->len);
 
     return TC_ACT_OK;
 }

@@ -2,9 +2,11 @@ package classifier
 
 import (
 	"fmt"
+	"math/rand"
 	"net"
 	"net/netip"
 
+	classifierK8s "github.com/acll19/netledger/internal/classifier/kubernetes"
 	"github.com/acll19/netledger/internal/classifier/metrics"
 	"github.com/acll19/netledger/internal/network"
 	"github.com/acll19/netledger/internal/payload"
@@ -37,26 +39,30 @@ func Classify(data []payload.FlowEntry,
 	nodeIndex map[string]NodeInfo,
 	ingStatistics metrics.StatisticMap,
 	egStatistics metrics.StatisticMap,
-	svcIndex map[string][]string,
+	svcIndex map[classifierK8s.ServiceKey]classifierK8s.ServiceInfo,
 	serviceIpNet *net.IPNet,
 ) []FlowLog {
 	flowLogs := make([]FlowLog, 0, len(data))
-	servicesToInternetIndex, cursor := createServicesToInternetIndex(data)
+	_, cursor := createServicesToInternetIndex(data)
 
 	for i := cursor; i < len(data); i++ {
 		entry := data[i]
 		var srcPod, dstPod metrics.PodKey
 		srcIp := entry.SrcIP
 		dstIp := entry.DstIP
-		// check if dstIp is a service that talks to the internet
+		// check if dstIp is a service (take a random backend)
 		if ip, err := network.StringIpToNetIp(dstIp); err == nil && serviceIpNet.Contains(ip) {
 			if addrs, ok := svcIndex[dstIp]; ok {
-				for _, addr := range addrs {
-					if _, ok := servicesToInternetIndex[addr]; ok {
-						dstIp = addr
-						break
-					}
-				}
+				randIndex := rand.Intn(len(addrs.Backends))
+				dstIp = addrs.Backends[randIndex]
+			}
+		}
+
+		// check if srcIp is a service (take a random backend)
+		if ip, err := network.StringIpToNetIp(srcIp); err == nil && serviceIpNet.Contains(ip) {
+			if addrs, ok := svcIndex[srcIp]; ok {
+				randIndex := rand.Intn(len(addrs.Backends))
+				srcIp = addrs.Backends[randIndex]
 			}
 		}
 
