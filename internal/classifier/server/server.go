@@ -22,7 +22,7 @@ import (
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/tools/cache"
 
-	classifierK8s "github.com/acll19/netledger/internal/classifier/kubernetes"
+	ck8s "github.com/acll19/netledger/internal/classifier/kubernetes"
 )
 
 type Server struct {
@@ -31,7 +31,7 @@ type Server struct {
 	nodeIpIndex     map[uint32]string         // maps Node IPv4s to Node name (for hostNetwork pods)
 	podIndex        map[metrics.PodKey]classifier.PodInfo
 	nodeIndex       map[string]classifier.NodeInfo
-	svcIndex        map[string]classifierK8s.ServiceInfo
+	svcIndex        map[string]ck8s.ServiceInfo
 	ingStatistics   metrics.StatisticMap
 	egStatistics    metrics.StatisticMap
 	svcInformer     cache.SharedIndexInformer
@@ -52,7 +52,7 @@ func NewServer(clientset *kubernetes.Clientset, svcInformer, epSliceInformer cac
 		nodeIndex:       map[string]classifier.NodeInfo{},
 		ingStatistics:   metrics.StatisticMap{},
 		egStatistics:    metrics.StatisticMap{},
-		svcIndex:        map[string]classifierK8s.ServiceInfo{},
+		svcIndex:        map[string]ck8s.ServiceInfo{},
 	}
 	return server
 }
@@ -94,7 +94,7 @@ func (s *Server) Start(ctx context.Context, reg *prometheus.Registry) error {
 }
 
 func (s *Server) WatchPods() {
-	classifierK8s.WatchPods(s.clientset, s.onPodAdd, s.onPodDelete, s.onPodUpdate)
+	ck8s.WatchPods(s.clientset, s.onPodAdd, s.onPodDelete, s.onPodUpdate)
 }
 
 func (s *Server) onPodAdd(obj any) {
@@ -206,7 +206,7 @@ func (s *Server) onPodDelete(obj any) {
 }
 
 func (s *Server) WatchNodes() {
-	classifierK8s.WatchNodes(s.clientset, s.onNodeAdd, s.onNodeDelete, s.onNodeUpdate)
+	ck8s.WatchNodes(s.clientset, s.onNodeAdd, s.onNodeDelete, s.onNodeUpdate)
 }
 
 func (s *Server) onNodeAdd(obj any) {
@@ -275,7 +275,7 @@ func (s *Server) onNodeDelete(obj any) {
 }
 
 func (s *Server) WatchServices() {
-	classifierK8s.WatchServices(s.clientset, s.onServiceAdd, s.onServiceDelete, s.onServiceUpdate)
+	ck8s.WatchServices(s.clientset, s.onServiceAdd, s.onServiceDelete, s.onServiceUpdate)
 }
 
 func (s *Server) onServiceAdd(obj any) {
@@ -311,7 +311,7 @@ func (s *Server) handleService(obj any) {
 		return
 	}
 
-	svcInfo := classifierK8s.NewServiceInfp(svc)
+	svcInfo := ck8s.NewServiceInfp(svc)
 	if svcInfo.Name == "None" || svcInfo.Name == "" {
 		return
 	}
@@ -323,19 +323,21 @@ func (s *Server) handleService(obj any) {
 	svcInfo.ContainerPorts = containerPorts
 
 	addresses := make([]string, 0)
-	eps := classifierK8s.GetEndpointSlices(s.epSliceInformer)
+	targetRefs := make(map[string]*v1.ObjectReference)
+	eps := ck8s.GetEndpointSlices(s.epSliceInformer)
 	for _, ep := range eps {
 		svcName := ep.Labels["kubernetes.io/service-name"]
 		if svcName == svc.Name && ep.Namespace == svc.Namespace {
 			for _, e := range ep.Endpoints {
-				for _, addr := range e.Addresses {
-					addresses = append(addresses, addr)
+				if *e.Conditions.Ready && *e.Conditions.Serving && !*e.Conditions.Terminating {
+					for _, addr := range e.Addresses {
+						addresses = append(addresses, addr)
+						targetRefs[addr] = e.TargetRef
+					}
 				}
 			}
-			// TODO
-			// 1. only add if conditions are serving and not terminating
-			// 2. add targetRef details in the service Info too
 			svcInfo.Backends = addresses
+			svcInfo.AddrTargetRef = targetRefs
 			break
 		}
 	}
@@ -351,7 +353,7 @@ func (s *Server) handleService(obj any) {
 }
 
 func (s *Server) WatchEndpointSlices() {
-	classifierK8s.WatchEndpointSlices(s.clientset, s.onEndpointSliceAdd, s.onEndpointSliceDelete, s.onEndpointSliceUpdate)
+	ck8s.WatchEndpointSlices(s.clientset, s.onEndpointSliceAdd, s.onEndpointSliceDelete, s.onEndpointSliceUpdate)
 }
 
 func (s *Server) onEndpointSliceAdd(obj any) {
@@ -369,7 +371,7 @@ func (s *Server) onEndpointSliceDelete(obj any) {
 		return
 	}
 
-	var svc classifierK8s.ServiceInfo
+	var svc ck8s.ServiceInfo
 	var svcKey string
 	for key, svcInfo := range s.svcIndex {
 		if svcInfo.Name == svcName {
@@ -415,7 +417,7 @@ func (s *Server) handleEndpointSlice(obj any) {
 		return
 	}
 
-	var svcInfo classifierK8s.ServiceInfo
+	var svcInfo ck8s.ServiceInfo
 	for _, si := range s.svcIndex {
 		if si.Name == svcName {
 			svcInfo = si

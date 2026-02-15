@@ -21,6 +21,7 @@ type ServiceInfo struct {
 	ExternalIPs    []string
 	NodePorts      []int32
 	ContainerPorts []int32
+	AddrTargetRef  map[string]*v1.ObjectReference
 }
 
 func NewServiceInfp(svc *v1.Service) ServiceInfo {
