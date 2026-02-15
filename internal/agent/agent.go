@@ -89,24 +89,55 @@ func Run(flushInterval time.Duration, node, server, serviceCidr string, debug bo
 	// TCX
 	iface, err := network.GetHostEth0Interface()
 	if err != nil {
-		return fmt.Errorf("failed to list cilium veths: %w", err)
+		return fmt.Errorf("failed to list eth0 interface: %w", err)
 	}
 	activeLinks = append(activeLinks, cgroupIngressLink)
 
 	ifacesMap := make(map[int]net.Interface)
-	al, m, err := bpf.AttachTcxToCiliumHostVeths(
+	tcxEgressLink, tcxEgressMap, err := bpf.AttachTcxToInterfaces(
 		[]net.Interface{iface},
 		objs.TcEgress,
 		ebpf.AttachType(ebpf.AttachTCXEgress),
 	)
 	if err != nil {
-		return fmt.Errorf("attach tcx program to interface: %w", err)
+		return fmt.Errorf("attach tcx egress program to host eth0 interface: %w", err)
 	}
-	activeLinks = append(activeLinks, al...)
-	maps.Copy(ifacesMap, m)
+	activeLinks = append(activeLinks, tcxEgressLink...)
+	maps.Copy(ifacesMap, tcxEgressMap)
+
+	// tcxIngressLink, tcxIngressMap, err := bpf.AttachTcxToInterfaces(
+	// 	[]net.Interface{iface},
+	// 	objs.TcIngress,
+	// 	ebpf.AttachType(ebpf.AttachTCXIngress),
+	// )
+	// if err != nil {
+	// 	return fmt.Errorf("attach tcx ingress program to interface: %w", err)
+	// }
+	// activeLinks = append(activeLinks, tcxIngressLink...)
+	// maps.Copy(ifacesMap, tcxIngressMap)
+
+	// lxcIfaces, err := network.ListCiliumVeths()
+	// if err != nil {
+	// 	return fmt.Errorf("failed to list cilium pod veths: %w", err)
+	// }
+
+	// lxcIngLink, lxcIngMap, err := bpf.AttachTcxToInterfaces(lxcIfaces, objs.TcIngress, ebpf.AttachType(ebpf.AttachTCXIngress))
+	// if err != nil {
+	// 	return fmt.Errorf("attach tcx program to cilium pod veths: %w", err)
+	// }
+	// activeLinks = append(activeLinks, lxcIngLink...)
+	// maps.Copy(ifacesMap, lxcIngMap)
+
+	// lxcEgLink, lxcEgMap, err := bpf.AttachTcxToInterfaces(lxcIfaces, objs.TcEgress, ebpf.AttachType(ebpf.AttachTCXEgress))
+	// if err != nil {
+	// 	return fmt.Errorf("attach tcx program to cilium pod veths: %w", err)
+	// }
+	// activeLinks = append(activeLinks, lxcEgLink...)
+	// maps.Copy(ifacesMap, lxcEgMap)
+
 	log.Println("Number of active links: ", len(activeLinks))
 
-	// done, err := bpf.ManageTCXLinks(ifacesMap, activeLinks, objs.TcxEgress, ebpf.AttachType(ebpf.AttachTCXIngress))
+	// done, err := bpf.ManageTCXLinks(ifacesMap, activeLinks, objs.TcEgress, ebpf.AttachType(ebpf.AttachTCXIngress))
 	// if err != nil {
 	// 	return fmt.Errorf("subscribe to link updates: %w", err)
 	// }
@@ -138,6 +169,7 @@ func Run(flushInterval time.Duration, node, server, serviceCidr string, debug bo
 	size := objs.ConnMap.MaxEntries()
 	keys := make([]uint64, size)
 	values := make([]bpf.NetLedgerConnVal, size)
+
 	for {
 		select {
 		case <-stop:
@@ -169,7 +201,7 @@ func Run(flushInterval time.Duration, node, server, serviceCidr string, debug bo
 			hCursor := new(ebpf.MapBatchCursor)
 			hKeys := make([]uint64, size)
 			hValues := make([]bpf.NetLedgerConnVal, size)
-			n2, err := objs.HostConnMap.BatchLookup(hCursor, hKeys, hValues, opts)
+			n2, err := objs.HostConnMap.BatchLookupAndDelete(hCursor, hKeys, hValues, opts)
 			slog.Debug("host batch lookup result", "n", n2, "err", err, "mapSize", objs.HostConnMap.MaxEntries())
 
 			podsOnHost := kubernetes.GetPods(informer)
@@ -259,20 +291,14 @@ func Run(flushInterval time.Duration, node, server, serviceCidr string, debug bo
 			}
 
 			if len(entries) > 0 {
-				slog.Info(fmt.Sprintf("Sending %d entries to API server\n", len(entries)))
-				serverCtx := context.WithoutCancel(context.Background())
-				err := sendDataToServer(serverCtx, server, entries)
-				if err != nil {
-					slog.Error(err.Error())
-				}
-
-				if debug {
-					slog.Info(fmt.Sprintf("Sending %d entries to API local server\n", len(entries)))
-					err := sendDataToServer(serverCtx, "http://172.18.0.1:8080/write-network-statistics", entries)
+				go func() {
+					slog.Info(fmt.Sprintf("Sending %d entries to API server\n", len(entries)))
+					serverCtx := context.WithoutCancel(context.Background())
+					err := sendDataToServer(serverCtx, server, entries)
 					if err != nil {
 						slog.Error(err.Error())
 					}
-				}
+				}()
 			}
 		}
 	}
@@ -337,6 +363,20 @@ func searchPod(ip string, connVal bpf.NetLedgerConnVal, podsOnHost []*v1.Pod) *v
 	return nil
 }
 
+var httpClient = &http.Client{
+	Timeout: 2 * time.Second,
+	Transport: &http.Transport{
+		DisableKeepAlives: true, // VERY important here
+		DialContext: (&net.Dialer{
+			Timeout:   500 * time.Millisecond,
+			KeepAlive: 30 * time.Second,
+		}).DialContext,
+		TLSHandshakeTimeout:   500 * time.Millisecond,
+		ResponseHeaderTimeout: 1 * time.Second,
+		ExpectContinueTimeout: 200 * time.Millisecond,
+	},
+}
+
 func sendDataToServer(ctx context.Context, server string, flowEntries []payload.FlowEntry) error {
 	content := payload.Encode(flowEntries)
 	req, err := http.NewRequest("POST", server, bytes.NewReader(content))
@@ -345,9 +385,7 @@ func sendDataToServer(ctx context.Context, server string, flowEntries []payload.
 	}
 
 	req = req.WithContext(ctx)
-
-	client := http.DefaultClient
-	res, err := client.Do(req)
+	res, err := httpClient.Do(req)
 	if err != nil {
 		return fmt.Errorf("do request: %w", err)
 	}

@@ -31,7 +31,7 @@ type Server struct {
 	nodeIpIndex     map[uint32]string         // maps Node IPv4s to Node name (for hostNetwork pods)
 	podIndex        map[metrics.PodKey]classifier.PodInfo
 	nodeIndex       map[string]classifier.NodeInfo
-	svcIndex        map[classifierK8s.ServiceKey]classifierK8s.ServiceInfo
+	svcIndex        map[string]classifierK8s.ServiceInfo
 	ingStatistics   metrics.StatisticMap
 	egStatistics    metrics.StatisticMap
 	svcInformer     cache.SharedIndexInformer
@@ -52,7 +52,7 @@ func NewServer(clientset *kubernetes.Clientset, svcInformer, epSliceInformer cac
 		nodeIndex:       map[string]classifier.NodeInfo{},
 		ingStatistics:   metrics.StatisticMap{},
 		egStatistics:    metrics.StatisticMap{},
-		svcIndex:        map[classifierK8s.ServiceKey]classifierK8s.ServiceInfo{},
+		svcIndex:        map[string]classifierK8s.ServiceInfo{},
 	}
 	return server
 }
@@ -219,10 +219,20 @@ func (s *Server) onNodeAdd(obj any) {
 	if !ok {
 		zone = "unknown"
 	}
+
+	var ip string
+	for _, addr := range node.Status.Addresses {
+		if addr.Type == v1.NodeInternalIP {
+			ip = addr.Address
+			break
+		}
+	}
+
 	s.mutex.Lock()
 	s.nodeIndex[node.Name] = classifier.NodeInfo{
-		Region: region,
-		Zone:   zone,
+		Region:     region,
+		Zone:       zone,
+		InternalIp: ip,
 	}
 	s.mutex.Unlock()
 }
@@ -301,29 +311,43 @@ func (s *Server) handleService(obj any) {
 		return
 	}
 
-	key, svcInfo := classifierK8s.NewServiceInfp(svc)
+	svcInfo := classifierK8s.NewServiceInfp(svc)
 	if svcInfo.Name == "None" || svcInfo.Name == "" {
 		return
 	}
 
+	containerPorts := make([]int32, 0)
+	for _, port := range svc.Spec.Ports {
+		containerPorts = append(containerPorts, port.TargetPort.IntVal)
+	}
+	svcInfo.ContainerPorts = containerPorts
+
+	addresses := make([]string, 0)
 	eps := classifierK8s.GetEndpointSlices(s.epSliceInformer)
 	for _, ep := range eps {
 		svcName := ep.Labels["kubernetes.io/service-name"]
 		if svcName == svc.Name && ep.Namespace == svc.Namespace {
-			addresses := make([]string, 0)
 			for _, e := range ep.Endpoints {
 				for _, addr := range e.Addresses {
 					addresses = append(addresses, addr)
 				}
 			}
+			// TODO
+			// 1. only add if conditions are serving and not terminating
+			// 2. add targetRef details in the service Info too
 			svcInfo.Backends = addresses
 			break
 		}
 	}
 
-	s.mutex.Lock()
-	s.svcIndex[key] = svcInfo
-	s.mutex.Unlock()
+	for _, cp := range containerPorts {
+		for _, addr := range addresses {
+			key := fmt.Sprintf("%s:%d", addr, cp)
+			s.mutex.Lock()
+			s.svcIndex[key] = svcInfo
+			s.mutex.Unlock()
+		}
+	}
 }
 
 func (s *Server) WatchEndpointSlices() {
@@ -391,24 +415,32 @@ func (s *Server) handleEndpointSlice(obj any) {
 		return
 	}
 
-	for key, svcInfo := range s.svcIndex {
-		if svcInfo.Name == svcName {
-			backends := make([]string, 0)
-			for _, ep := range eps.Endpoints {
-				for _, addr := range ep.Addresses {
-					backends = append(backends, addr)
-				}
-			}
-			svc := s.svcIndex[key]
-			svc.Backends = append(svc.Backends, backends...)
-
-			s.mutex.Lock()
-			s.svcIndex[key] = svc
-			s.mutex.Unlock()
-
+	var svcInfo classifierK8s.ServiceInfo
+	for _, si := range s.svcIndex {
+		if si.Name == svcName {
+			svcInfo = si
 			break
 		}
 	}
+
+	backends := make([]string, 0)
+	for _, ep := range eps.Endpoints {
+		for _, addr := range ep.Addresses {
+			backends = append(backends, addr)
+		}
+	}
+
+	svcInfo.Backends = append(svcInfo.Backends, backends...)
+
+	for _, cp := range svcInfo.ContainerPorts {
+		for _, addr := range backends {
+			key := fmt.Sprintf("%s:%d", addr, cp)
+			s.mutex.Lock()
+			s.svcIndex[key] = svcInfo
+			s.mutex.Unlock()
+		}
+	}
+
 }
 
 func (s *Server) handlePayload(w http.ResponseWriter, r *http.Request) {

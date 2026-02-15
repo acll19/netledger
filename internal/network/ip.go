@@ -65,6 +65,21 @@ func GetHostEth0Interface() (net.Interface, error) {
 	return net.Interface{}, fmt.Errorf("host eth0 interface not found or not up")
 }
 
+func GetCiliumHostInterface() (net.Interface, error) {
+	ifaces, err := net.Interfaces()
+	if err != nil {
+		return net.Interface{}, fmt.Errorf("failed to list interfaces: %w", err)
+	}
+
+	for _, iface := range ifaces {
+		if iface.Name == "cilium_host" && iface.Flags&net.FlagUp != 0 {
+			return iface, nil
+		}
+	}
+
+	return net.Interface{}, fmt.Errorf("host cilium_host interface not found or not up")
+}
+
 func StringIpToNetIp(ip string) (net.IP, error) {
 	parsedIP := net.ParseIP(ip)
 	if parsedIP == nil {

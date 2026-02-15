@@ -2,11 +2,12 @@ package classifier
 
 import (
 	"fmt"
-	"math/rand"
+	"log/slog"
 	"net"
 	"net/netip"
+	"slices"
 
-	classifierK8s "github.com/acll19/netledger/internal/classifier/kubernetes"
+	ck8s "github.com/acll19/netledger/internal/classifier/kubernetes"
 	"github.com/acll19/netledger/internal/classifier/metrics"
 	"github.com/acll19/netledger/internal/network"
 	"github.com/acll19/netledger/internal/payload"
@@ -18,8 +19,9 @@ type PodInfo struct {
 }
 
 type NodeInfo struct {
-	Zone   string
-	Region string
+	Zone       string
+	Region     string
+	InternalIp string
 }
 
 type FlowLog struct {
@@ -39,32 +41,56 @@ func Classify(data []payload.FlowEntry,
 	nodeIndex map[string]NodeInfo,
 	ingStatistics metrics.StatisticMap,
 	egStatistics metrics.StatisticMap,
-	svcIndex map[classifierK8s.ServiceKey]classifierK8s.ServiceInfo,
+	svcIndex map[string]ck8s.ServiceInfo,
 	serviceIpNet *net.IPNet,
 ) []FlowLog {
 	flowLogs := make([]FlowLog, 0, len(data))
-	_, cursor := createServicesToInternetIndex(data)
+	nodePortConnections, otherServiceConnections, cursor := processHostConnections(data, nodeIndex, svcIndex)
 
 	for i := cursor; i < len(data); i++ {
 		entry := data[i]
 		var srcPod, dstPod metrics.PodKey
 		srcIp := entry.SrcIP
 		dstIp := entry.DstIP
-		// check if dstIp is a service (take a random backend)
+		srcPort := entry.SrcPort
+		dstPort := entry.DstPort
+
+		srcTarget := fmt.Sprintf("%s:%d", srcIp, srcPort)
+		dstTarget := fmt.Sprintf("%s:%d", dstIp, dstPort)
+
+		if target, ok := svcIndex[srcTarget]; ok {
+			slog.Info("Found service for src target", slog.String("target", target.Name))
+		}
+		if target, ok := svcIndex[dstTarget]; ok {
+			slog.Info("Found service for dst target", slog.String("target", target.Name))
+		}
+
+		var isNodePort bool
 		if ip, err := network.StringIpToNetIp(dstIp); err == nil && serviceIpNet.Contains(ip) {
-			if addrs, ok := svcIndex[dstIp]; ok {
-				randIndex := rand.Intn(len(addrs.Backends))
-				dstIp = addrs.Backends[randIndex]
+			for _, conn := range nodePortConnections {
+				if slices.Contains(conn.Svc.Backends, srcIp) {
+					isNodePort = true
+				}
+			}
+		}
+
+		var isSelectorlessServiceWithInternetEndpointSlice bool
+		if ip, err := network.StringIpToNetIp(dstIp); err == nil && serviceIpNet.Contains(ip) {
+			for _, conn := range otherServiceConnections {
+				if conn.Svc.ClusterIP == dstIp {
+					isSelectorlessServiceWithInternetEndpointSlice = true
+					break
+				}
 			}
 		}
 
 		// check if srcIp is a service (take a random backend)
-		if ip, err := network.StringIpToNetIp(srcIp); err == nil && serviceIpNet.Contains(ip) {
-			if addrs, ok := svcIndex[srcIp]; ok {
-				randIndex := rand.Intn(len(addrs.Backends))
-				srcIp = addrs.Backends[randIndex]
-			}
-		}
+		// if ip, err := network.StringIpToNetIp(srcIp); err == nil && serviceIpNet.Contains(ip) {
+		// 	if addrs, ok := svcIndex[srcIp]; ok {
+		// 		randIndex := rand.Intn(len(addrs.Backends))
+		// 		srcIp = addrs.Backends[randIndex]
+		// 	}
+		// }
 
 		var srcZone, dstZone, srcRegion, dstRegion string
 		var srcParsed, dstParsed netip.Addr
@@ -84,7 +110,10 @@ func Classify(data []payload.FlowEntry,
 
 		srcParsed, _ = netip.ParseAddr(srcIp)
 		dstParsed, _ = netip.ParseAddr(dstIp)
-		isInternet := network.IsInternetIP(srcParsed) || network.IsInternetIP(dstParsed)
+		isInternet := isNodePort ||
+			isSelectorlessServiceWithInternetEndpointSlice ||
+			network.IsInternetIP(srcParsed) ||
+			network.IsInternetIP(dstParsed)
 
 		flowKey := metrics.FlowKey{
 			Internet:   isInternet,
@@ -156,22 +185,70 @@ func Classify(data []payload.FlowEntry,
 	return flowLogs
 }
 
-func createServicesToInternetIndex(data []payload.FlowEntry) (map[string]struct{}, int) {
-	servicesToInternetIndex := make(map[string]struct{}, len(data))
+type svcConnection struct {
+	Conn payload.FlowEntry
+	Svc  ck8s.ServiceInfo
+}
+
+func processHostConnections(data []payload.FlowEntry,
+	nodeIndex map[string]NodeInfo,
+	svcIndex map[string]ck8s.ServiceInfo) (map[string]svcConnection, map[string]svcConnection, int) {
+
+	nodePortConnections := make(map[string]svcConnection, len(data))
+	otherServiceConnections := make(map[string]svcConnection, len(data))
+
+	nodePortServices := make([]ck8s.ServiceInfo, 0)
+	for _, svc := range svcIndex {
+		if len(svc.NodePorts) > 0 {
+			nodePortServices = append(nodePortServices, svc)
+		}
+	}
+
+	nodeIps := make([]string, 0, len(nodeIndex))
+	for _, nodeInfo := range nodeIndex {
+		nodeIps = append(nodeIps, nodeInfo.InternalIp)
+	}
+
 	cursor := 0
 	for cursor < len(data) {
 		d := data[cursor]
+		slog.Info(d.SrcIP + " -> " + d.DstIP)
 		if d.IsObservedInHost != 1 {
 			break
 		}
 
-		dstIp, _ := netip.ParseAddr(d.DstIP)
-		if network.IsInternetIP(dstIp) {
-			servicesToInternetIndex[d.DstIP] = struct{}{}
+		dstIp := d.DstIP
+		srcIp := d.SrcIP
+		if slices.Contains(nodeIps, dstIp) {
+			dstPort := d.DstPort
+			for _, svc := range nodePortServices {
+				for _, p := range svc.NodePorts {
+					if p == int32(dstPort) {
+						nodePortConnections[dstIp] = svcConnection{
+							Conn: d,
+							Svc:  svc,
+						}
+					}
+				}
+			}
 		}
+
+		if slices.Contains(nodeIps, srcIp) {
+			for _, svc := range svcIndex {
+				for _, b := range svc.Backends {
+					if b == dstIp {
+						otherServiceConnections[svc.ClusterIP] = svcConnection{
+							Conn: d,
+							Svc:  svc,
+						}
+					}
+				}
+			}
+		}
+
 		cursor++
 	}
-	return servicesToInternetIndex, cursor
+	return nodePortConnections, otherServiceConnections, cursor
 }
 
 func searchPod(ip string, entry payload.FlowEntry, podIpIndex map[uint32]metrics.PodKey) (metrics.PodKey, bool) {

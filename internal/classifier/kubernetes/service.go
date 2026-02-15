@@ -14,17 +14,16 @@ import (
 )
 
 type ServiceInfo struct {
-	Namespace   string
-	Name        string
-	ClusterIP   string
-	Backends    []string
-	ExternalIPs []string
-	NodePorts   []int32
+	Namespace      string
+	Name           string
+	ClusterIP      string
+	Backends       []string
+	ExternalIPs    []string
+	NodePorts      []int32
+	ContainerPorts []int32
 }
 
-type ServiceKey = string
-
-func NewServiceInfp(svc *v1.Service) (ServiceKey, ServiceInfo) {
+func NewServiceInfp(svc *v1.Service) ServiceInfo {
 	svcInfo := ServiceInfo{
 		Name:        svc.Name,
 		Namespace:   svc.Namespace,
@@ -46,7 +45,7 @@ func NewServiceInfp(svc *v1.Service) (ServiceKey, ServiceInfo) {
 		}
 	}
 
-	return key, svcInfo
+	return svcInfo
 }
 
 func WatchServices(client *kubernetes.Clientset, onAdd, onDelete func(obj any), onUpdate func(oldObj, newObj any)) {
