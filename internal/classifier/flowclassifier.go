@@ -38,6 +38,7 @@ type ClassifyOptions struct {
 	PodIndex      map[metrics.PodKey]PodInfo
 	PodIpIndex    map[uint32]metrics.PodKey
 	NodeIndex     map[string]NodeInfo
+	NodeIpIndex   map[uint32]string
 	SvcIndex      map[string]ck8s.ServiceInfo
 	ServiceIpNet  *net.IPNet
 	IngStatistics metrics.StatisticMap
@@ -56,6 +57,7 @@ func Classify(data []payload.FlowEntry, opts ClassifyOptions) []FlowLog {
 		srcTarget := fmt.Sprintf("%s:%d", srcIp, srcPort)
 		dstTarget := fmt.Sprintf("%s:%d", dstIp, dstPort)
 
+		// Pod to ClusterIP
 		if target, ok := opts.SvcIndex[srcTarget]; ok {
 			srcPod = metrics.PodKey{
 				Name:      target.AddrTargetRef[srcIp].Name,
@@ -75,6 +77,7 @@ func Classify(data []payload.FlowEntry, opts ClassifyOptions) []FlowLog {
 			randIndex := rand.Intn(len(target.Backends))
 			dstIp = target.Backends[randIndex]
 		}
+		// end Pod to ClusterIP
 
 		// var isNodePort bool
 		// if ip, err := network.StringIpToNetIp(dstIp); err == nil && serviceIpNet.Contains(ip) {
@@ -153,7 +156,7 @@ func Classify(data []payload.FlowEntry, opts ClassifyOptions) []FlowLog {
 			// - internet,
 			// - pod to svc typed ExternalName,
 			// - pod to svc without selectors with endpoint slices to public IPs,
-			// - external initiated requests to pod,
+			// - external initiated requests to NodePort or LoadBalancer services,
 			// - etc.
 			switch entry.Direction {
 			case 0: // egress

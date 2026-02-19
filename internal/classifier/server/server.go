@@ -475,6 +475,7 @@ func (s *Server) handlePayload(w http.ResponseWriter, r *http.Request) {
 		PodIndex:      s.podIndex,
 		PodIpIndex:    s.podIpIndex,
 		NodeIndex:     s.nodeIndex,
+		NodeIpIndex:   s.nodeIpIndex,
 		SvcIndex:      s.svcIndex,
 		ServiceIpNet:  s.serviceIpNet,
 		IngStatistics: s.ingStatistics,
