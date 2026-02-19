@@ -34,15 +34,17 @@ type FlowLog struct {
 	Bytes     int
 }
 
-func Classify(data []payload.FlowEntry,
-	podIndex map[metrics.PodKey]PodInfo,
-	podIpIndex map[uint32]metrics.PodKey,
-	nodeIndex map[string]NodeInfo,
-	ingStatistics metrics.StatisticMap,
-	egStatistics metrics.StatisticMap,
-	svcIndex map[string]ck8s.ServiceInfo,
-	serviceIpNet *net.IPNet,
-) []FlowLog {
+type ClassifyOptions struct {
+	PodIndex      map[metrics.PodKey]PodInfo
+	PodIpIndex    map[uint32]metrics.PodKey
+	NodeIndex     map[string]NodeInfo
+	SvcIndex      map[string]ck8s.ServiceInfo
+	ServiceIpNet  *net.IPNet
+	IngStatistics metrics.StatisticMap
+	EgStatistics  metrics.StatisticMap
+}
+
+func Classify(data []payload.FlowEntry, opts ClassifyOptions) []FlowLog {
 	flowLogs := make([]FlowLog, 0, len(data))
 	for _, entry := range data {
 		var srcPod, dstPod metrics.PodKey
@@ -54,7 +56,7 @@ func Classify(data []payload.FlowEntry,
 		srcTarget := fmt.Sprintf("%s:%d", srcIp, srcPort)
 		dstTarget := fmt.Sprintf("%s:%d", dstIp, dstPort)
 
-		if target, ok := svcIndex[srcTarget]; ok {
+		if target, ok := opts.SvcIndex[srcTarget]; ok {
 			srcPod = metrics.PodKey{
 				Name:      target.AddrTargetRef[srcIp].Name,
 				Namespace: target.AddrTargetRef[srcIp].Namespace,
@@ -64,7 +66,7 @@ func Classify(data []payload.FlowEntry,
 			srcIp = target.Backends[randIndex]
 		}
 
-		if target, ok := svcIndex[dstTarget]; ok {
+		if target, ok := opts.SvcIndex[dstTarget]; ok {
 			dstPod = metrics.PodKey{
 				Name:      target.AddrTargetRef[dstIp].Name,
 				Namespace: target.AddrTargetRef[dstIp].Namespace,
@@ -97,21 +99,21 @@ func Classify(data []payload.FlowEntry,
 		var srcParsed, dstParsed netip.Addr
 
 		if srcPod.Name == "" {
-			srcPod, _ = searchPod(srcIp, entry, podIpIndex)
+			srcPod, _ = searchPod(srcIp, entry, opts.PodIpIndex)
 		}
 		if dstPod.Name == "" {
-			dstPod, _ = searchPod(dstIp, entry, podIpIndex)
+			dstPod, _ = searchPod(dstIp, entry, opts.PodIpIndex)
 		}
 
-		srcPodInfo := podIndex[srcPod]
+		srcPodInfo := opts.PodIndex[srcPod]
 		srcNode := srcPodInfo.Node
-		srcZone = nodeIndex[srcNode].Zone
-		srcRegion = nodeIndex[srcNode].Region
+		srcZone = opts.NodeIndex[srcNode].Zone
+		srcRegion = opts.NodeIndex[srcNode].Region
 
-		dstPodInfo := podIndex[dstPod]
+		dstPodInfo := opts.PodIndex[dstPod]
 		dstNode := dstPodInfo.Node
-		dstZone = nodeIndex[dstNode].Zone
-		dstRegion = nodeIndex[dstNode].Region
+		dstZone = opts.NodeIndex[dstNode].Zone
+		dstRegion = opts.NodeIndex[dstNode].Region
 
 		srcParsed, _ = netip.ParseAddr(srcIp)
 		dstParsed, _ = netip.ParseAddr(dstIp)
@@ -128,22 +130,22 @@ func Classify(data []payload.FlowEntry,
 
 			case 0: // egress
 				srcKey := metrics.FlowKey{PodName: srcPod.Name, Namespace: srcPod.Namespace}
-				egStatistics[srcKey] = metrics.FlowSize{
-					Traffic: egStatistics[srcKey].Traffic + entry.TxBytes,
+				opts.EgStatistics[srcKey] = metrics.FlowSize{
+					Traffic: opts.EgStatistics[srcKey].Traffic + entry.TxBytes,
 				}
 
-				ingStatistics[srcKey] = metrics.FlowSize{
-					Traffic: ingStatistics[srcKey].Traffic + entry.RxBytes,
+				opts.IngStatistics[srcKey] = metrics.FlowSize{
+					Traffic: opts.IngStatistics[srcKey].Traffic + entry.RxBytes,
 				}
 
 			case 1: // ingress
 				dstKey := metrics.FlowKey{PodName: dstPod.Name, Namespace: dstPod.Namespace}
-				ingStatistics[dstKey] = metrics.FlowSize{
-					Traffic: ingStatistics[dstKey].Traffic + entry.RxBytes,
+				opts.IngStatistics[dstKey] = metrics.FlowSize{
+					Traffic: opts.IngStatistics[dstKey].Traffic + entry.RxBytes,
 				}
 
-				egStatistics[dstKey] = metrics.FlowSize{
-					Traffic: egStatistics[dstKey].Traffic + entry.TxBytes,
+				opts.EgStatistics[dstKey] = metrics.FlowSize{
+					Traffic: opts.EgStatistics[dstKey].Traffic + entry.TxBytes,
 				}
 			}
 		} else {
@@ -157,26 +159,26 @@ func Classify(data []payload.FlowEntry,
 			case 0: // egress
 				flowKey.PodName = srcPod.Name
 				flowKey.Namespace = srcPod.Namespace
-				currentFlow := egStatistics[flowKey]
-				egStatistics[flowKey] = metrics.FlowSize{
+				currentFlow := opts.EgStatistics[flowKey]
+				opts.EgStatistics[flowKey] = metrics.FlowSize{
 					Traffic: entry.TxBytes + currentFlow.Traffic,
 				}
 
 				// we count RX for the same pod
-				currentFlow = ingStatistics[flowKey]
-				ingStatistics[flowKey] = metrics.FlowSize{
+				currentFlow = opts.IngStatistics[flowKey]
+				opts.IngStatistics[flowKey] = metrics.FlowSize{
 					Traffic: entry.RxBytes + currentFlow.Traffic,
 				}
 			case 1: // ingress
 				flowKey.PodName = dstPod.Name
 				flowKey.Namespace = dstPod.Namespace
-				currentFlow := ingStatistics[flowKey]
-				ingStatistics[flowKey] = metrics.FlowSize{
+				currentFlow := opts.IngStatistics[flowKey]
+				opts.IngStatistics[flowKey] = metrics.FlowSize{
 					Traffic: entry.RxBytes + currentFlow.Traffic,
 				}
 
-				currentFlow = egStatistics[flowKey]
-				egStatistics[flowKey] = metrics.FlowSize{
+				currentFlow = opts.EgStatistics[flowKey]
+				opts.EgStatistics[flowKey] = metrics.FlowSize{
 					Traffic: entry.TxBytes + currentFlow.Traffic,
 				}
 			}

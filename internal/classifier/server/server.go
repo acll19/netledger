@@ -471,16 +471,20 @@ func (s *Server) handlePayload(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	classifyOptions := classifier.ClassifyOptions{
+		PodIndex:      s.podIndex,
+		PodIpIndex:    s.podIpIndex,
+		NodeIndex:     s.nodeIndex,
+		SvcIndex:      s.svcIndex,
+		ServiceIpNet:  s.serviceIpNet,
+		IngStatistics: s.ingStatistics,
+		EgStatistics:  s.egStatistics,
+	}
+
 	s.mutex.Lock()
 	flowLogs := classifier.Classify(
 		data,
-		s.podIndex,
-		s.podIpIndex,
-		s.nodeIndex,
-		s.ingStatistics,
-		s.egStatistics,
-		s.svcIndex,
-		s.serviceIpNet,
+		classifyOptions,
 	)
 	s.mutex.Unlock()
 
