@@ -8,7 +8,6 @@ import (
 	"io"
 	"log"
 	"log/slog"
-	"maps"
 	"net"
 	"net/http"
 	"os"
@@ -86,61 +85,7 @@ func Run(flushInterval time.Duration, node, server, serviceCidr string, debug bo
 	}
 	activeLinks = append(activeLinks, cgroupBindLink)
 
-	// TCX
-	iface, err := network.GetHostEth0Interface()
-	if err != nil {
-		return fmt.Errorf("failed to list eth0 interface: %w", err)
-	}
-	activeLinks = append(activeLinks, cgroupIngressLink)
-
-	ifacesMap := make(map[int]net.Interface)
-	tcxEgressLink, tcxEgressMap, err := bpf.AttachTcxToInterfaces(
-		[]net.Interface{iface},
-		objs.TcEgress,
-		ebpf.AttachType(ebpf.AttachTCXEgress),
-	)
-	if err != nil {
-		return fmt.Errorf("attach tcx egress program to host eth0 interface: %w", err)
-	}
-	activeLinks = append(activeLinks, tcxEgressLink...)
-	maps.Copy(ifacesMap, tcxEgressMap)
-
-	// tcxIngressLink, tcxIngressMap, err := bpf.AttachTcxToInterfaces(
-	// 	[]net.Interface{iface},
-	// 	objs.TcIngress,
-	// 	ebpf.AttachType(ebpf.AttachTCXIngress),
-	// )
-	// if err != nil {
-	// 	return fmt.Errorf("attach tcx ingress program to interface: %w", err)
-	// }
-	// activeLinks = append(activeLinks, tcxIngressLink...)
-	// maps.Copy(ifacesMap, tcxIngressMap)
-
-	// lxcIfaces, err := network.ListCiliumVeths()
-	// if err != nil {
-	// 	return fmt.Errorf("failed to list cilium pod veths: %w", err)
-	// }
-
-	// lxcIngLink, lxcIngMap, err := bpf.AttachTcxToInterfaces(lxcIfaces, objs.TcIngress, ebpf.AttachType(ebpf.AttachTCXIngress))
-	// if err != nil {
-	// 	return fmt.Errorf("attach tcx program to cilium pod veths: %w", err)
-	// }
-	// activeLinks = append(activeLinks, lxcIngLink...)
-	// maps.Copy(ifacesMap, lxcIngMap)
-
-	// lxcEgLink, lxcEgMap, err := bpf.AttachTcxToInterfaces(lxcIfaces, objs.TcEgress, ebpf.AttachType(ebpf.AttachTCXEgress))
-	// if err != nil {
-	// 	return fmt.Errorf("attach tcx program to cilium pod veths: %w", err)
-	// }
-	// activeLinks = append(activeLinks, lxcEgLink...)
-	// maps.Copy(ifacesMap, lxcEgMap)
-
 	log.Println("Number of active links: ", len(activeLinks))
-
-	// done, err := bpf.ManageTCXLinks(ifacesMap, activeLinks, objs.TcEgress, ebpf.AttachType(ebpf.AttachTCXIngress))
-	// if err != nil {
-	// 	return fmt.Errorf("subscribe to link updates: %w", err)
-	// }
 
 	defer func() {
 		for _, link := range activeLinks {
@@ -148,7 +93,6 @@ func Run(flushInterval time.Duration, node, server, serviceCidr string, debug bo
 				slog.Error("error closing link object", "message: ", err.Error())
 			}
 		}
-		// close(done)
 	}()
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -198,42 +142,13 @@ func Run(flushInterval time.Duration, node, server, serviceCidr string, debug bo
 			keys = keys[:n]
 			values = values[:n]
 
-			hCursor := new(ebpf.MapBatchCursor)
-			hKeys := make([]uint64, size)
-			hValues := make([]bpf.NetLedgerConnVal, size)
-			n2, err := objs.HostConnMap.BatchLookupAndDelete(hCursor, hKeys, hValues, opts)
-			slog.Debug("host batch lookup result", "n", n2, "err", err, "mapSize", objs.HostConnMap.MaxEntries())
-
 			podsOnHost := kubernetes.GetPods(informer)
 			fKeys, fValues := keys, values
 			// fKeys, fValues := filterSrcOrDstIpOnCurrentHost(keys, values, podsOnHost)
 
 			// debug
-			log.Println("host keys count:", n2)
-
-			// debug
 			log.Println("debug printing", len(fKeys), "keys", "started with", n, "keys before filtering to host-local pods (", len(keys), ")")
 			entries := make([]payload.FlowEntry, 0, len(fKeys))
-
-			// add every host-observed connections first
-			for i := range len(hKeys) {
-				if hValues[i].SrcIp > 0 && hValues[i].DstIp > 0 {
-					srcIp := network.Uint32ToIP(hValues[i].SrcIp)
-					dstIp := network.Uint32ToIP(hValues[i].DstIp)
-
-					entry := payload.FlowEntry{
-						Direction:        int(hValues[i].ConnDirection),
-						SrcIP:            srcIp.To4().String(),
-						SrcPort:          hValues[i].SrcPort,
-						DstIP:            dstIp.To4().String(),
-						DstPort:          hValues[i].DstPort,
-						TxBytes:          hValues[i].TxBytes,
-						RxBytes:          hValues[i].RxBytes,
-						IsObservedInHost: int(hValues[i].IsObservedInHost),
-					}
-					entries = append(entries, entry)
-				}
-			}
 
 			for i := range len(fKeys) {
 				if fValues[i].HaveSrc == 0 || fValues[i].HaveDst == 0 {

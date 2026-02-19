@@ -2,10 +2,9 @@ package classifier
 
 import (
 	"fmt"
-	"log/slog"
+	"math/rand"
 	"net"
 	"net/netip"
-	"slices"
 
 	ck8s "github.com/acll19/netledger/internal/classifier/kubernetes"
 	"github.com/acll19/netledger/internal/classifier/metrics"
@@ -45,10 +44,7 @@ func Classify(data []payload.FlowEntry,
 	serviceIpNet *net.IPNet,
 ) []FlowLog {
 	flowLogs := make([]FlowLog, 0, len(data))
-	nodePortConnections, otherServiceConnections, cursor := processHostConnections(data, nodeIndex, svcIndex)
-
-	for i := cursor; i < len(data); i++ {
-		entry := data[i]
+	for _, entry := range data {
 		var srcPod, dstPod metrics.PodKey
 		srcIp := entry.SrcIP
 		dstIp := entry.DstIP
@@ -59,44 +55,53 @@ func Classify(data []payload.FlowEntry,
 		dstTarget := fmt.Sprintf("%s:%d", dstIp, dstPort)
 
 		if target, ok := svcIndex[srcTarget]; ok {
-			slog.Info("Found service for src target", slog.String("target", target.Name))
+			srcPod = metrics.PodKey{
+				Name:      target.AddrTargetRef[srcIp].Name,
+				Namespace: target.AddrTargetRef[srcIp].Namespace,
+			}
+
+			randIndex := rand.Intn(len(target.Backends))
+			srcIp = target.Backends[randIndex]
 		}
+
 		if target, ok := svcIndex[dstTarget]; ok {
-			slog.Info("Found service for dst target", slog.String("target", target.Name))
-		}
-
-		var isNodePort bool
-		if ip, err := network.StringIpToNetIp(dstIp); err == nil && serviceIpNet.Contains(ip) {
-			for _, conn := range nodePortConnections {
-				if slices.Contains(conn.Svc.Backends, srcIp) {
-					isNodePort = true
-				}
+			dstPod = metrics.PodKey{
+				Name:      target.AddrTargetRef[dstIp].Name,
+				Namespace: target.AddrTargetRef[dstIp].Namespace,
 			}
+
+			randIndex := rand.Intn(len(target.Backends))
+			dstIp = target.Backends[randIndex]
 		}
 
-		var isSelectorlessServiceWithInternetEndpointSlice bool
-		if ip, err := network.StringIpToNetIp(dstIp); err == nil && serviceIpNet.Contains(ip) {
-			for _, conn := range otherServiceConnections {
-				if conn.Svc.ClusterIP == dstIp {
-					isSelectorlessServiceWithInternetEndpointSlice = true
-					break
-				}
-			}
-		}
+		// var isNodePort bool
+		// if ip, err := network.StringIpToNetIp(dstIp); err == nil && serviceIpNet.Contains(ip) {
+		// 	for _, conn := range nodePortConnections {
+		// 		if slices.Contains(conn.Svc.Backends, srcIp) {
+		// 			isNodePort = true
+		// 		}
+		// 	}
+		// }
 
-		// check if srcIp is a service (take a random backend)
-		// if ip, err := network.StringIpToNetIp(srcIp); err == nil && serviceIpNet.Contains(ip) {
-		// 	if addrs, ok := svcIndex[srcIp]; ok {
-		// 		randIndex := rand.Intn(len(addrs.Backends))
-		// 		srcIp = addrs.Backends[randIndex]
+		// var isSelectorlessServiceWithInternetEndpointSlice bool
+		// if ip, err := network.StringIpToNetIp(dstIp); err == nil && serviceIpNet.Contains(ip) {
+		// 	for _, conn := range otherServiceConnections {
+		// 		if conn.Svc.ClusterIP == dstIp {
+		// 			isSelectorlessServiceWithInternetEndpointSlice = true
+		// 			break
+		// 		}
 		// 	}
 		// }
 
 		var srcZone, dstZone, srcRegion, dstRegion string
 		var srcParsed, dstParsed netip.Addr
 
-		srcPod, _ = searchPod(srcIp, entry, podIpIndex)
-		dstPod, _ = searchPod(dstIp, entry, podIpIndex)
+		if srcPod.Name == "" {
+			srcPod, _ = searchPod(srcIp, entry, podIpIndex)
+		}
+		if dstPod.Name == "" {
+			dstPod, _ = searchPod(dstIp, entry, podIpIndex)
+		}
 
 		srcPodInfo := podIndex[srcPod]
 		srcNode := srcPodInfo.Node
@@ -110,10 +115,7 @@ func Classify(data []payload.FlowEntry,
 
 		srcParsed, _ = netip.ParseAddr(srcIp)
 		dstParsed, _ = netip.ParseAddr(dstIp)
-		isInternet := isNodePort ||
-			isSelectorlessServiceWithInternetEndpointSlice ||
-			network.IsInternetIP(srcParsed) ||
-			network.IsInternetIP(dstParsed)
+		isInternet := network.IsInternetIP(srcParsed) || network.IsInternetIP(dstParsed)
 
 		flowKey := metrics.FlowKey{
 			Internet:   isInternet,
@@ -122,18 +124,27 @@ func Classify(data []payload.FlowEntry,
 		}
 
 		if !isInternet && srcPod.Name != "" && dstPod.Name != "" {
-			flowKey.PodName = srcPod.Name
-			flowKey.Namespace = srcPod.Namespace
-			currentFlow := egStatistics[flowKey]
-			egStatistics[flowKey] = metrics.FlowSize{
-				Traffic: entry.TxBytes + currentFlow.Traffic,
-			}
+			switch entry.Direction {
 
-			flowKey.PodName = dstPod.Name
-			flowKey.Namespace = dstPod.Namespace
-			currentFlow = ingStatistics[flowKey]
-			ingStatistics[flowKey] = metrics.FlowSize{
-				Traffic: entry.RxBytes + currentFlow.Traffic,
+			case 0: // egress
+				srcKey := metrics.FlowKey{PodName: srcPod.Name, Namespace: srcPod.Namespace}
+				egStatistics[srcKey] = metrics.FlowSize{
+					Traffic: egStatistics[srcKey].Traffic + entry.TxBytes,
+				}
+
+				ingStatistics[srcKey] = metrics.FlowSize{
+					Traffic: ingStatistics[srcKey].Traffic + entry.RxBytes,
+				}
+
+			case 1: // ingress
+				dstKey := metrics.FlowKey{PodName: dstPod.Name, Namespace: dstPod.Namespace}
+				ingStatistics[dstKey] = metrics.FlowSize{
+					Traffic: ingStatistics[dstKey].Traffic + entry.RxBytes,
+				}
+
+				egStatistics[dstKey] = metrics.FlowSize{
+					Traffic: egStatistics[dstKey].Traffic + entry.TxBytes,
+				}
 			}
 		} else {
 			// This could be
@@ -183,72 +194,6 @@ func Classify(data []payload.FlowEntry,
 		})
 	}
 	return flowLogs
-}
-
-type svcConnection struct {
-	Conn payload.FlowEntry
-	Svc  ck8s.ServiceInfo
-}
-
-func processHostConnections(data []payload.FlowEntry,
-	nodeIndex map[string]NodeInfo,
-	svcIndex map[string]ck8s.ServiceInfo) (map[string]svcConnection, map[string]svcConnection, int) {
-
-	nodePortConnections := make(map[string]svcConnection, len(data))
-	otherServiceConnections := make(map[string]svcConnection, len(data))
-
-	nodePortServices := make([]ck8s.ServiceInfo, 0)
-	for _, svc := range svcIndex {
-		if len(svc.NodePorts) > 0 {
-			nodePortServices = append(nodePortServices, svc)
-		}
-	}
-
-	nodeIps := make([]string, 0, len(nodeIndex))
-	for _, nodeInfo := range nodeIndex {
-		nodeIps = append(nodeIps, nodeInfo.InternalIp)
-	}
-
-	cursor := 0
-	for cursor < len(data) {
-		d := data[cursor]
-		slog.Info(d.SrcIP + " -> " + d.DstIP)
-		if d.IsObservedInHost != 1 {
-			break
-		}
-
-		dstIp := d.DstIP
-		srcIp := d.SrcIP
-		if slices.Contains(nodeIps, dstIp) {
-			dstPort := d.DstPort
-			for _, svc := range nodePortServices {
-				for _, p := range svc.NodePorts {
-					if p == int32(dstPort) {
-						nodePortConnections[dstIp] = svcConnection{
-							Conn: d,
-							Svc:  svc,
-						}
-					}
-				}
-			}
-		}
-
-		if slices.Contains(nodeIps, srcIp) {
-			for _, svc := range svcIndex {
-				for _, b := range svc.Backends {
-					if b == dstIp {
-						otherServiceConnections[svc.ClusterIP] = svcConnection{
-							Conn: d,
-							Svc:  svc,
-						}
-					}
-				}
-			}
-		}
-
-		cursor++
-	}
-	return nodePortConnections, otherServiceConnections, cursor
 }
 
 func searchPod(ip string, entry payload.FlowEntry, podIpIndex map[uint32]metrics.PodKey) (metrics.PodKey, bool) {

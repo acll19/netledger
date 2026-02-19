@@ -325,11 +325,19 @@ func (s *Server) handleService(obj any) {
 	addresses := make([]string, 0)
 	targetRefs := make(map[string]*v1.ObjectReference)
 	eps := ck8s.GetEndpointSlices(s.epSliceInformer)
+
+	isEndpointActive := func(e discovery.Endpoint) bool {
+		if !*e.Conditions.Ready {
+			return false
+		}
+		return true
+	}
+
 	for _, ep := range eps {
 		svcName := ep.Labels["kubernetes.io/service-name"]
 		if svcName == svc.Name && ep.Namespace == svc.Namespace {
 			for _, e := range ep.Endpoints {
-				if *e.Conditions.Ready && *e.Conditions.Serving && !*e.Conditions.Terminating {
+				if isEndpointActive(e) {
 					for _, addr := range e.Addresses {
 						addresses = append(addresses, addr)
 						targetRefs[addr] = e.TargetRef
