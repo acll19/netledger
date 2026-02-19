@@ -59,9 +59,11 @@ func Classify(data []payload.FlowEntry, opts ClassifyOptions) []FlowLog {
 
 		// Pod to ClusterIP
 		if target, ok := opts.SvcIndex[srcTarget]; ok {
-			srcPod = metrics.PodKey{
-				Name:      target.AddrTargetRef[srcIp].Name,
-				Namespace: target.AddrTargetRef[srcIp].Namespace,
+			if target.AddrTargetRef[srcIp] != nil {
+				srcPod = metrics.PodKey{
+					Name:      target.AddrTargetRef[srcIp].Name,
+					Namespace: target.AddrTargetRef[srcIp].Namespace,
+				}
 			}
 
 			randIndex := rand.Intn(len(target.Backends))
@@ -69,9 +71,11 @@ func Classify(data []payload.FlowEntry, opts ClassifyOptions) []FlowLog {
 		}
 
 		if target, ok := opts.SvcIndex[dstTarget]; ok {
-			dstPod = metrics.PodKey{
-				Name:      target.AddrTargetRef[dstIp].Name,
-				Namespace: target.AddrTargetRef[dstIp].Namespace,
+			if target.AddrTargetRef[dstIp] != nil {
+				dstPod = metrics.PodKey{
+					Name:      target.AddrTargetRef[dstIp].Name,
+					Namespace: target.AddrTargetRef[dstIp].Namespace,
+				}
 			}
 
 			randIndex := rand.Intn(len(target.Backends))
