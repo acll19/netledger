@@ -85,6 +85,11 @@ func Run(flushInterval time.Duration, node, server, serviceCidr string, debug bo
 	}
 	activeLinks = append(activeLinks, cgroupBindLink)
 
+	cgroupSockopsLink, err := bpf.AttachRootCgroup(objs.TcpSockops, ebpf.AttachCGroupSockOps)
+	if err != nil {
+		return fmt.Errorf("attach cgroup skb: %w", err)
+	}
+	activeLinks = append(activeLinks, cgroupSockopsLink)
 	log.Println("Number of active links: ", len(activeLinks))
 
 	defer func() {
@@ -129,7 +134,7 @@ func Run(flushInterval time.Duration, node, server, serviceCidr string, debug bo
 			values = values[:size]
 			opts := &ebpf.BatchOptions{}
 			cursor := new(ebpf.MapBatchCursor)
-			n, err := objs.ConnMap.BatchLookupAndDelete(cursor, keys, values, opts)
+			n, err := objs.ConnMap.BatchLookup(cursor, keys, values, opts)
 			slog.Debug("batch lookup result", "n", n, "err", err, "mapSize", objs.ConnMap.MaxEntries())
 			if n <= 0 {
 				log.Println("no data, skipping")
@@ -143,8 +148,7 @@ func Run(flushInterval time.Duration, node, server, serviceCidr string, debug bo
 			values = values[:n]
 
 			podsOnHost := kubernetes.GetPods(informer)
-			fKeys, fValues := keys, values
-			// fKeys, fValues := filterSrcOrDstIpOnCurrentHost(keys, values, podsOnHost)
+			fKeys, fValues := filterSrcOrDstIpOnCurrentHost(keys, values, podsOnHost)
 
 			// debug
 			log.Println("debug printing", len(fKeys), "keys", "started with", n, "keys before filtering to host-local pods (", len(keys), ")")
@@ -154,6 +158,11 @@ func Run(flushInterval time.Duration, node, server, serviceCidr string, debug bo
 				if fValues[i].HaveSrc == 0 || fValues[i].HaveDst == 0 {
 					continue
 				}
+
+				if fValues[i].TxBytes == 0 && fValues[i].RxBytes == 0 {
+					continue
+				}
+
 				srcIp := network.Uint32ToIP(fValues[i].SrcIp)
 				dstIp := network.Uint32ToIP(fValues[i].DstIp)
 

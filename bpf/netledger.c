@@ -6,8 +6,21 @@
 
 char __license[] SEC("license") = "Dual MIT/GPL";
 
+#ifndef IPPROTO_TCP
 #define IPPROTO_TCP 6
+#endif
+
+#ifndef IPPROTO_UDP
 #define IPPROTO_UDP 17
+#endif
+
+#ifndef AF_INET
+#define AF_INET 2
+#endif
+
+#ifndef BPF_SOCK_OPS_TCP_ACK_CB
+#define BPF_SOCK_OPS_TCP_ACK_CB 14
+#endif
 
 #define TC_ACT_OK 0
 #define ETH_P_IP 0x0800
@@ -50,19 +63,11 @@ struct conn_val
 
 struct
 {
-    __uint(type, BPF_MAP_TYPE_HASH);
+    __uint(type, BPF_MAP_TYPE_LRU_HASH);
     __uint(max_entries, 131072);
     __type(key, __u64); /* socket cookie */
     __type(value, struct conn_val);
 } conn_map SEC(".maps");
-
-struct
-{
-    __uint(type, BPF_MAP_TYPE_HASH);
-    __uint(max_entries, 131072);
-    __type(key, __u64); /* socket cookie */
-    __type(value, struct conn_val);
-} host_conn_map SEC(".maps");
 
 /* ============================================================
  * Helpers
@@ -132,10 +137,111 @@ static __always_inline int parse_ipv4_tuple(struct __sk_buff *skb,
 
     return -1;
 }
+
+static __always_inline int handle_conn_established4(struct conn_val *c,
+                                                   struct bpf_sock_ops *skops,
+                                                   __u8 conn_direction,
+                                                   __u64 cookie)
+{
+    __u32 src_ip = skops->local_ip4;
+    __u32 dst_ip = skops->remote_ip4;
+    __u16 src_port = bpf_ntohs(skops->local_port);
+    __u16 dst_port = bpf_ntohs(skops->remote_port);
+
+    if (c)
+    {
+        if (!c->have_src || !c->have_dst)
+        {
+            c->src_ip = src_ip;
+            c->dst_ip = dst_ip;
+            c->src_port = src_port;
+            c->dst_port = dst_port;
+        }
+        c->proto = IPPROTO_TCP;
+        c->have_src = 1;
+        c->have_dst = 1;
+        c->conn_direction = conn_direction;
+    }
+    else
+    {
+        struct conn_val new = {};
+
+        new.src_ip = src_ip;
+        new.dst_ip = dst_ip;
+        new.src_port = src_port;
+        new.dst_port = dst_port;
+        new.proto = IPPROTO_TCP;
+        new.have_src = 1;
+        new.have_dst = 1;
+        new.conn_direction = conn_direction;
+
+        bpf_map_update_elem(&conn_map, &cookie, &new, BPF_ANY);
+    }
+
+    return 0;
+}
+
+/* ==========================================
+ * sock_ops - for more accurate byte counting
+ * ========================================== */
+SEC("sockops")
+int tcp_sockops(struct bpf_sock_ops *skops)
+{
+    bpf_sock_ops_cb_flags_set(skops, BPF_SOCK_OPS_STATE_CB_FLAG);
+
+    /* Only care about TCP IPv4 for now */
+    if (skops->family != AF_INET)
+        return 0;
+
+    __u64 cookie = bpf_get_socket_cookie(skops);
+    if (!cookie)
+        return 0;
+
+    __u32 src_ip = skops->local_ip4;
+    __u32 dst_ip = skops->remote_ip4;
+    __u16 src_port = bpf_ntohs(skops->local_port);
+    __u16 dst_port = bpf_ntohs(skops->remote_port);
+
+    struct conn_val *c = bpf_map_lookup_elem(&conn_map, &cookie);
+
+    switch (skops->op)
+    {
+
+    /* Connection established (active/egress or passive/ingress) */
+    case BPF_SOCK_OPS_ACTIVE_ESTABLISHED_CB:
+    {
+
+        handle_conn_established4(c, skops, CONN_POD_ORIGINATED, cookie);
+        break;
+    }
+
+    case BPF_SOCK_OPS_PASSIVE_ESTABLISHED_CB:
+    {
+        handle_conn_established4(c, skops, CONN_EXTERNAL_ORIGINATED, cookie);
+        break;
+    }
+
+    /* Cleanup when socket closes */
+    case BPF_SOCK_OPS_STATE_CB:
+    {
+        if (skops->args[1] == TCP_CLOSE)
+        {
+            if (c)
+                bpf_map_delete_elem(&conn_map, &cookie);
+        }
+        break;
+    }
+
+    default:
+        break;
+    }
+
+    return 1;
+}
+
 /* ============================================================
  * bind4 — learn local (source) tuple for pod-originated
  * ============================================================ */
-
 SEC("cgroup/bind4")
 int cg_bind4(struct bpf_sock_addr *ctx)
 {
@@ -159,7 +265,6 @@ int cg_bind4(struct bpf_sock_addr *ctx)
 /* ============================================================
  * connect4 — mark pod-originated connections
  * ============================================================ */
-
 SEC("cgroup/connect4")
 int cg_connect4(struct bpf_sock_addr *ctx)
 {
@@ -177,7 +282,6 @@ int cg_connect4(struct bpf_sock_addr *ctx)
 /* ============================================================
  * ingress skb — RX accounting + external TCP detection
  * ============================================================ */
-
 SEC("cgroup_skb/ingress")
 int cg_ingress(struct __sk_buff *skb)
 {
@@ -240,7 +344,6 @@ int cg_ingress(struct __sk_buff *skb)
 /* ============================================================
  * egress skb — TX accounting + tuple completion
  * ============================================================ */
-
 SEC("cgroup_skb/egress")
 int cg_egress(struct __sk_buff *skb)
 {
