@@ -8,6 +8,7 @@ import (
 	"io"
 	"log"
 	"log/slog"
+	"math"
 	"net"
 	"net/http"
 	"os"
@@ -38,8 +39,16 @@ func Run(flushInterval time.Duration, node, server, serviceCidr string, debug bo
 		return fmt.Errorf("loading netledger: %w", err)
 	}
 
+	if err := os.MkdirAll("/sys/fs/bpf/netledger", 0755); err != nil {
+		return fmt.Errorf("error creating directory for pinning eBPF maps: %w", err)
+	}
 	var objs bpf.NetLedgerObjects
-	if err := spec.LoadAndAssign(&objs, nil); err != nil {
+	opts := &ebpf.CollectionOptions{
+		Maps: ebpf.MapOptions{
+			PinPath: "/sys/fs/bpf/netledger",
+		},
+	}
+	if err := spec.LoadAndAssign(&objs, opts); err != nil {
 		return fmt.Errorf("load eBPF objects: %w", err)
 	}
 	defer objs.Close()
@@ -118,6 +127,7 @@ func Run(flushInterval time.Duration, node, server, serviceCidr string, debug bo
 	size := objs.ConnMap.MaxEntries()
 	keys := make([]uint64, size)
 	values := make([]bpf.NetLedgerConnVal, size)
+	lastSeen := make(map[uint64]bpf.NetLedgerConnVal, size) // map[key]value for calculating deltas
 
 	for {
 		select {
@@ -163,6 +173,27 @@ func Run(flushInterval time.Duration, node, server, serviceCidr string, debug bo
 					continue
 				}
 
+				lastVal, found := lastSeen[fKeys[i]]
+				// If we have seen this key before, and the values are the same, skip
+				if found {
+					if lastVal.TxBytes == fValues[i].TxBytes && lastVal.RxBytes == fValues[i].RxBytes {
+						continue
+					}
+				}
+				tx := fValues[i].TxBytes
+				rx := fValues[i].RxBytes
+				if found {
+					tx -= lastVal.TxBytes
+					if tx == math.MaxUint64 {
+						tx = fValues[i].TxBytes
+					}
+					rx -= lastVal.RxBytes
+					if rx == math.MaxUint64 {
+						rx = fValues[i].RxBytes
+					}
+				}
+				lastSeen[fKeys[i]] = fValues[i]
+
 				srcIp := network.Uint32ToIP(fValues[i].SrcIp)
 				dstIp := network.Uint32ToIP(fValues[i].DstIp)
 
@@ -204,8 +235,8 @@ func Run(flushInterval time.Duration, node, server, serviceCidr string, debug bo
 					SrcPort:         sport,
 					DstIP:           dstIp.To4().String(),
 					DstPort:         dport,
-					TxBytes:         fValues[i].TxBytes,
-					RxBytes:         fValues[i].RxBytes,
+					TxBytes:         tx,
+					RxBytes:         rx,
 					SrcPodName:      srcPod,
 					SrcPodNamespace: srcNs,
 					DstPodName:      dstPod,
@@ -224,6 +255,8 @@ func Run(flushInterval time.Duration, node, server, serviceCidr string, debug bo
 					}
 				}()
 			}
+
+			removeClosedConnections(lastSeen, fKeys)
 		}
 	}
 }
@@ -290,7 +323,7 @@ func searchPod(ip string, connVal bpf.NetLedgerConnVal, podsOnHost []*v1.Pod) *v
 var httpClient = &http.Client{
 	Timeout: 2 * time.Second,
 	Transport: &http.Transport{
-		DisableKeepAlives: true, // VERY important here
+		DisableKeepAlives: true,
 		DialContext: (&net.Dialer{
 			Timeout:   500 * time.Millisecond,
 			KeepAlive: 30 * time.Second,
@@ -325,4 +358,17 @@ func sendDataToServer(ctx context.Context, server string, flowEntries []payload.
 	}
 
 	return nil
+}
+
+func removeClosedConnections(lastSeen map[uint64]bpf.NetLedgerConnVal, currentConnsKeys []uint64) {
+	currentConnsKeyMap := make(map[uint64]struct{}, len(currentConnsKeys))
+	for _, key := range currentConnsKeys {
+		currentConnsKeyMap[key] = struct{}{}
+	}
+
+	for cookie := range lastSeen {
+		if _, exists := currentConnsKeyMap[cookie]; !exists {
+			delete(lastSeen, cookie)
+		}
+	}
 }

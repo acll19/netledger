@@ -67,6 +67,7 @@ struct
     __uint(max_entries, 131072);
     __type(key, __u64); /* socket cookie */
     __type(value, struct conn_val);
+    __uint(pinning, LIBBPF_PIN_BY_NAME);
 } conn_map SEC(".maps");
 
 /* ============================================================

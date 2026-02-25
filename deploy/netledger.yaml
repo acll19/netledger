@@ -80,6 +80,14 @@ spec:
         securityContext:
           privileged: true
           readOnlyRootFilesystem: true
+        volumeMounts:
+        - name: bpffs
+          mountPath: /sys/fs/bpf
+      volumes:
+        - name: bpffs
+          hostPath:
+            path: /sys/fs/bpf
+            type: Directory
 ---
 apiVersion: v1
 kind: ServiceAccount

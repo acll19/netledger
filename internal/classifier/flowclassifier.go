@@ -126,7 +126,7 @@ func Classify(data []payload.FlowEntry, opts ClassifyOptions) []FlowLog {
 		dstParsed, _ = netip.ParseAddr(dstIp)
 		isInternet := network.IsInternetIP(srcParsed) || network.IsInternetIP(dstParsed)
 
-		statKey := metrics.FlowKey{
+		flowKey := metrics.FlowKey{
 			Internet:   isInternet,
 			SameZone:   srcZone == dstZone,
 			SameRegion: srcRegion == dstRegion,
@@ -134,26 +134,25 @@ func Classify(data []payload.FlowEntry, opts ClassifyOptions) []FlowLog {
 
 		if !isInternet && srcPod.Name != "" && dstPod.Name != "" {
 			switch entry.Direction {
-			// Because both tx and rx are connection bytes accummulated since the connection was established,
-			// we need to subtract the previous value to avoid double counting when we update the flow size for both ingress and egress.
+
 			case 0: // egress
 				srcKey := metrics.FlowKey{PodName: srcPod.Name, Namespace: srcPod.Namespace}
 				opts.EgStatistics[srcKey] = metrics.FlowSize{
-					Traffic: entry.TxBytes + (opts.EgStatistics[srcKey].Traffic - entry.TxBytes),
+					Traffic: opts.EgStatistics[srcKey].Traffic + entry.TxBytes,
 				}
 
 				opts.IngStatistics[srcKey] = metrics.FlowSize{
-					Traffic: entry.RxBytes + (opts.IngStatistics[srcKey].Traffic - entry.RxBytes),
+					Traffic: opts.IngStatistics[srcKey].Traffic + entry.RxBytes,
 				}
 
 			case 1: // ingress
 				dstKey := metrics.FlowKey{PodName: dstPod.Name, Namespace: dstPod.Namespace}
 				opts.IngStatistics[dstKey] = metrics.FlowSize{
-					Traffic: entry.RxBytes + (opts.IngStatistics[dstKey].Traffic - entry.RxBytes),
+					Traffic: opts.IngStatistics[dstKey].Traffic + entry.RxBytes,
 				}
 
 				opts.EgStatistics[dstKey] = metrics.FlowSize{
-					Traffic: entry.TxBytes + (opts.EgStatistics[dstKey].Traffic - entry.TxBytes),
+					Traffic: opts.EgStatistics[dstKey].Traffic + entry.TxBytes,
 				}
 			}
 		} else {
@@ -165,29 +164,29 @@ func Classify(data []payload.FlowEntry, opts ClassifyOptions) []FlowLog {
 			// - etc.
 			switch entry.Direction {
 			case 0: // egress
-				statKey.PodName = srcPod.Name
-				statKey.Namespace = srcPod.Namespace
-				currentFlow := opts.EgStatistics[statKey]
-				opts.EgStatistics[statKey] = metrics.FlowSize{
-					Traffic: entry.TxBytes + (currentFlow.Traffic - entry.TxBytes),
+				flowKey.PodName = srcPod.Name
+				flowKey.Namespace = srcPod.Namespace
+				currentFlow := opts.EgStatistics[flowKey]
+				opts.EgStatistics[flowKey] = metrics.FlowSize{
+					Traffic: entry.TxBytes + currentFlow.Traffic,
 				}
 
 				// we count RX for the same pod
-				currentFlow = opts.IngStatistics[statKey]
-				opts.IngStatistics[statKey] = metrics.FlowSize{
-					Traffic: entry.RxBytes + (currentFlow.Traffic - entry.RxBytes),
+				currentFlow = opts.IngStatistics[flowKey]
+				opts.IngStatistics[flowKey] = metrics.FlowSize{
+					Traffic: entry.RxBytes + currentFlow.Traffic,
 				}
 			case 1: // ingress
-				statKey.PodName = dstPod.Name
-				statKey.Namespace = dstPod.Namespace
-				currentFlow := opts.IngStatistics[statKey]
-				opts.IngStatistics[statKey] = metrics.FlowSize{
-					Traffic: entry.RxBytes + (currentFlow.Traffic - entry.RxBytes),
+				flowKey.PodName = dstPod.Name
+				flowKey.Namespace = dstPod.Namespace
+				currentFlow := opts.IngStatistics[flowKey]
+				opts.IngStatistics[flowKey] = metrics.FlowSize{
+					Traffic: entry.RxBytes + currentFlow.Traffic,
 				}
 
-				currentFlow = opts.EgStatistics[statKey]
-				opts.EgStatistics[statKey] = metrics.FlowSize{
-					Traffic: entry.TxBytes + (currentFlow.Traffic - entry.TxBytes),
+				currentFlow = opts.EgStatistics[flowKey]
+				opts.EgStatistics[flowKey] = metrics.FlowSize{
+					Traffic: entry.TxBytes + currentFlow.Traffic,
 				}
 			}
 		}
