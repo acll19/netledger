@@ -57,8 +57,7 @@ struct conn_val
     __u8 have_src;
     __u8 have_dst;
 
-    // traffic observed from eth0 host interface
-    __u8 is_observed_in_host;
+    __u8 connection_closed;
 };
 
 struct
@@ -74,7 +73,8 @@ struct
  * Helpers
  * ============================================================ */
 
-/* Parse IPv4 + L4 headers and fill tuple */
+/* Parse IPv4 + L4 headers and fill tuple.
+   Returns 0 on success, -1 on failure */
 static __always_inline int parse_ipv4_tuple(struct __sk_buff *skb,
                                             struct conn_val *c,
                                             __u8 *is_tcp_syn)
@@ -140,9 +140,9 @@ static __always_inline int parse_ipv4_tuple(struct __sk_buff *skb,
 }
 
 static __always_inline int handle_conn_established4(struct conn_val *c,
-                                                   struct bpf_sock_ops *skops,
-                                                   __u8 conn_direction,
-                                                   __u64 cookie)
+                                                    struct bpf_sock_ops *skops,
+                                                    __u8 conn_direction,
+                                                    __u64 cookie)
 {
     __u32 src_ip = skops->local_ip4;
     __u32 dst_ip = skops->remote_ip4;
@@ -151,13 +151,18 @@ static __always_inline int handle_conn_established4(struct conn_val *c,
 
     if (c)
     {
-        if (!c->have_src || !c->have_dst)
+        if (!c->have_src)
         {
             c->src_ip = src_ip;
-            c->dst_ip = dst_ip;
             c->src_port = src_port;
+        }
+
+        if (!c->have_dst)
+        {
+            c->dst_ip = dst_ip;
             c->dst_port = dst_port;
         }
+
         c->proto = IPPROTO_TCP;
         c->have_src = 1;
         c->have_dst = 1;
@@ -183,7 +188,8 @@ static __always_inline int handle_conn_established4(struct conn_val *c,
 }
 
 /* ==========================================
- * sock_ops - for more accurate byte counting
+ * sock_ops - learn established TCP connections
+    + cleanup on close
  * ========================================== */
 SEC("sockops")
 int tcp_sockops(struct bpf_sock_ops *skops)
@@ -205,20 +211,27 @@ int tcp_sockops(struct bpf_sock_ops *skops)
 
     struct conn_val *c = bpf_map_lookup_elem(&conn_map, &cookie);
 
+    if (c)
+    {
+        __u32 ip = bpf_ntohl(src_ip);
+        bpf_printk("sockops: cookie=%llu cgroup_id=%llu dstIp=%u.%u.%u.%u dstPort=%u\n",
+                   cookie,
+                   c->cgroup_id,
+                   (ip >> 24) & 0xff,
+                   (ip >> 16) & 0xff,
+                   (ip >> 8) & 0xff,
+                   ip & 0xff,
+                   bpf_ntohs(src_port));
+    }
+
     switch (skops->op)
     {
 
     /* Connection established (active/egress or passive/ingress) */
     case BPF_SOCK_OPS_ACTIVE_ESTABLISHED_CB:
-    {
-
-        handle_conn_established4(c, skops, CONN_POD_ORIGINATED, cookie);
-        break;
-    }
-
     case BPF_SOCK_OPS_PASSIVE_ESTABLISHED_CB:
     {
-        handle_conn_established4(c, skops, CONN_EXTERNAL_ORIGINATED, cookie);
+        handle_conn_established4(c, skops, CONN_POD_ORIGINATED, cookie);
         break;
     }
 
@@ -228,7 +241,10 @@ int tcp_sockops(struct bpf_sock_ops *skops)
         if (skops->args[1] == TCP_CLOSE)
         {
             if (c)
-                bpf_map_delete_elem(&conn_map, &cookie);
+            {
+                c->connection_closed = 1;
+                /* we delete in user space to give time to count the last bytes */
+            }
         }
         break;
     }
@@ -275,6 +291,16 @@ int cg_connect4(struct bpf_sock_addr *ctx)
     c.cgroup_id = bpf_get_current_cgroup_id();
     c.conn_direction = CONN_POD_ORIGINATED;
     c.proto = IPPROTO_TCP;
+
+    __u32 ip = bpf_ntohl(ctx->user_ip4);
+    bpf_printk("connect4: cookie=%llu cgroup_id=%llu dstIp=%u.%u.%u.%u dstPort=%u\n",
+               cookie,
+               c.cgroup_id,
+               (ip >> 24) & 0xff,
+               (ip >> 16) & 0xff,
+               (ip >> 8) & 0xff,
+               ip & 0xff,
+               bpf_ntohs(ctx->user_port));
 
     bpf_map_update_elem(&conn_map, &cookie, &c, BPF_ANY);
     return 1;

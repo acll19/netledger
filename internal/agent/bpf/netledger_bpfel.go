@@ -27,7 +27,7 @@ type NetLedgerConnVal struct {
 	RxBytes          uint64
 	HaveSrc          uint8
 	HaveDst          uint8
-	IsObservedInHost uint8
+	ConnectionClosed uint8
 	_                [5]byte
 }
 
