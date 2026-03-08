@@ -18,7 +18,6 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	v1 "k8s.io/api/core/v1"
-	discovery "k8s.io/api/discovery/v1"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/tools/cache"
 
@@ -31,7 +30,6 @@ type Server struct {
 	nodeIpIndex     map[uint32]string         // maps Node IPv4s to Node name (for hostNetwork pods)
 	podIndex        map[metrics.PodKey]classifier.PodInfo
 	nodeIndex       map[string]classifier.NodeInfo
-	svcIndex        map[string]ck8s.ServiceInfo
 	ingStatistics   metrics.StatisticMap
 	egStatistics    metrics.StatisticMap
 	svcInformer     cache.SharedIndexInformer
@@ -40,19 +38,16 @@ type Server struct {
 	mutex           sync.RWMutex
 }
 
-func NewServer(clientset *kubernetes.Clientset, svcInformer, epSliceInformer cache.SharedIndexInformer, serviceIpNet *net.IPNet) *Server {
+func NewServer(clientset *kubernetes.Clientset, serviceIpNet *net.IPNet) *Server {
 	server := &Server{
-		clientset:       clientset,
-		svcInformer:     svcInformer,
-		epSliceInformer: epSliceInformer,
-		serviceIpNet:    serviceIpNet,
-		podIpIndex:      map[uint32]metrics.PodKey{},
-		nodeIpIndex:     map[uint32]string{},
-		podIndex:        map[metrics.PodKey]classifier.PodInfo{},
-		nodeIndex:       map[string]classifier.NodeInfo{},
-		ingStatistics:   metrics.StatisticMap{},
-		egStatistics:    metrics.StatisticMap{},
-		svcIndex:        map[string]ck8s.ServiceInfo{},
+		clientset:     clientset,
+		serviceIpNet:  serviceIpNet,
+		podIpIndex:    map[uint32]metrics.PodKey{},
+		nodeIpIndex:   map[uint32]string{},
+		podIndex:      map[metrics.PodKey]classifier.PodInfo{},
+		nodeIndex:     map[string]classifier.NodeInfo{},
+		ingStatistics: metrics.StatisticMap{},
+		egStatistics:  metrics.StatisticMap{},
 	}
 	return server
 }
@@ -274,185 +269,6 @@ func (s *Server) onNodeDelete(obj any) {
 	log.Printf("Node deleted: %s", node.Name)
 }
 
-func (s *Server) WatchServices() {
-	ck8s.WatchServices(s.clientset, s.onServiceAdd, s.onServiceDelete, s.onServiceUpdate)
-}
-
-func (s *Server) onServiceAdd(obj any) {
-	s.handleService(obj)
-}
-
-func (s *Server) onServiceDelete(obj any) {
-	svc, ok := obj.(*v1.Service)
-	if !ok {
-		return
-	}
-
-	var svcKey string
-	for key, svcInfo := range s.svcIndex {
-		if svcInfo.Name == svc.Name {
-			svcKey = key
-			break
-		}
-	}
-
-	s.mutex.Lock()
-	delete(s.svcIndex, svcKey)
-	s.mutex.Unlock()
-}
-
-func (s *Server) onServiceUpdate(oldObj, newObj any) {
-	s.handleService(newObj)
-}
-
-func (s *Server) handleService(obj any) {
-	svc, ok := obj.(*v1.Service)
-	if !ok {
-		return
-	}
-
-	svcInfo := ck8s.NewServiceInfp(svc)
-	if svcInfo.Name == "None" || svcInfo.Name == "" {
-		return
-	}
-
-	containerPorts := make([]int32, 0)
-	for _, port := range svc.Spec.Ports {
-		containerPorts = append(containerPorts, port.TargetPort.IntVal)
-	}
-	svcInfo.ContainerPorts = containerPorts
-
-	addresses := make([]string, 0)
-	targetRefs := make(map[string]*v1.ObjectReference)
-	eps := ck8s.GetEndpointSlices(s.epSliceInformer)
-
-	isEndpointActive := func(e discovery.Endpoint) bool {
-		if !*e.Conditions.Ready {
-			return false
-		}
-		return true
-	}
-
-	for _, ep := range eps {
-		svcName := ep.Labels["kubernetes.io/service-name"]
-		if svcName == svc.Name && ep.Namespace == svc.Namespace {
-			for _, e := range ep.Endpoints {
-				if isEndpointActive(e) {
-					for _, addr := range e.Addresses {
-						addresses = append(addresses, addr)
-						targetRefs[addr] = e.TargetRef
-					}
-				}
-			}
-			svcInfo.Backends = addresses
-			svcInfo.AddrTargetRef = targetRefs
-			break
-		}
-	}
-
-	for _, cp := range containerPorts {
-		for _, addr := range addresses {
-			key := fmt.Sprintf("%s:%d", addr, cp)
-			s.mutex.Lock()
-			s.svcIndex[key] = svcInfo
-			s.mutex.Unlock()
-		}
-	}
-}
-
-func (s *Server) WatchEndpointSlices() {
-	ck8s.WatchEndpointSlices(s.clientset, s.onEndpointSliceAdd, s.onEndpointSliceDelete, s.onEndpointSliceUpdate)
-}
-
-func (s *Server) onEndpointSliceAdd(obj any) {
-	s.handleEndpointSlice(obj)
-}
-
-func (s *Server) onEndpointSliceDelete(obj any) {
-	eps, ok := obj.(*discovery.EndpointSlice)
-	if !ok {
-		return
-	}
-
-	svcName := eps.Labels["kubernetes.io/service-name"]
-	if svcName == "" {
-		return
-	}
-
-	var svc ck8s.ServiceInfo
-	var svcKey string
-	for key, svcInfo := range s.svcIndex {
-		if svcInfo.Name == svcName {
-			svc = s.svcIndex[key]
-			svcKey = key
-			break
-		}
-	}
-
-	epsToDelete := make(map[string]struct{}, len(svc.Backends))
-	for _, ep := range eps.Endpoints {
-		for _, addr := range ep.Addresses {
-			epsToDelete[addr] = struct{}{}
-		}
-	}
-
-	updatedEndpoints := svc.Backends[:0]
-	for _, b := range svc.Backends {
-		if _, found := epsToDelete[b]; !found {
-			updatedEndpoints = append(updatedEndpoints, b)
-		}
-	}
-
-	svc.Backends = updatedEndpoints
-
-	s.mutex.Lock()
-	s.svcIndex[svcKey] = svc
-	s.mutex.Unlock()
-}
-
-func (s *Server) onEndpointSliceUpdate(oldObj, newObj any) {
-	s.handleEndpointSlice(newObj)
-}
-
-func (s *Server) handleEndpointSlice(obj any) {
-	eps, ok := obj.(*discovery.EndpointSlice)
-	if !ok {
-		return
-	}
-
-	svcName := eps.Labels["kubernetes.io/service-name"]
-	if svcName == "" {
-		return
-	}
-
-	var svcInfo ck8s.ServiceInfo
-	for _, si := range s.svcIndex {
-		if si.Name == svcName {
-			svcInfo = si
-			break
-		}
-	}
-
-	backends := make([]string, 0)
-	for _, ep := range eps.Endpoints {
-		for _, addr := range ep.Addresses {
-			backends = append(backends, addr)
-		}
-	}
-
-	svcInfo.Backends = append(svcInfo.Backends, backends...)
-
-	for _, cp := range svcInfo.ContainerPorts {
-		for _, addr := range backends {
-			key := fmt.Sprintf("%s:%d", addr, cp)
-			s.mutex.Lock()
-			s.svcIndex[key] = svcInfo
-			s.mutex.Unlock()
-		}
-	}
-
-}
-
 func (s *Server) handlePayload(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "Invalid request method", http.StatusMethodNotAllowed)
@@ -476,7 +292,6 @@ func (s *Server) handlePayload(w http.ResponseWriter, r *http.Request) {
 		PodIpIndex:    s.podIpIndex,
 		NodeIndex:     s.nodeIndex,
 		NodeIpIndex:   s.nodeIpIndex,
-		SvcIndex:      s.svcIndex,
 		ServiceIpNet:  s.serviceIpNet,
 		IngStatistics: s.ingStatistics,
 		EgStatistics:  s.egStatistics,

@@ -211,19 +211,6 @@ int tcp_sockops(struct bpf_sock_ops *skops)
 
     struct conn_val *c = bpf_map_lookup_elem(&conn_map, &cookie);
 
-    if (c)
-    {
-        __u32 ip = bpf_ntohl(src_ip);
-        bpf_printk("sockops: cookie=%llu cgroup_id=%llu dstIp=%u.%u.%u.%u dstPort=%u\n",
-                   cookie,
-                   c->cgroup_id,
-                   (ip >> 24) & 0xff,
-                   (ip >> 16) & 0xff,
-                   (ip >> 8) & 0xff,
-                   ip & 0xff,
-                   bpf_ntohs(src_port));
-    }
-
     switch (skops->op)
     {
 
@@ -291,16 +278,6 @@ int cg_connect4(struct bpf_sock_addr *ctx)
     c.cgroup_id = bpf_get_current_cgroup_id();
     c.conn_direction = CONN_POD_ORIGINATED;
     c.proto = IPPROTO_TCP;
-
-    __u32 ip = bpf_ntohl(ctx->user_ip4);
-    bpf_printk("connect4: cookie=%llu cgroup_id=%llu dstIp=%u.%u.%u.%u dstPort=%u\n",
-               cookie,
-               c.cgroup_id,
-               (ip >> 24) & 0xff,
-               (ip >> 16) & 0xff,
-               (ip >> 8) & 0xff,
-               ip & 0xff,
-               bpf_ntohs(ctx->user_port));
 
     bpf_map_update_elem(&conn_map, &cookie, &c, BPF_ANY);
     return 1;
