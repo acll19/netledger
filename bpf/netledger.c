@@ -28,8 +28,10 @@ char __license[] SEC("license") = "Dual MIT/GPL";
 #define CONN_POD_ORIGINATED 0
 #define CONN_EXTERNAL_ORIGINATED 1
 
-volatile const __u32 service_subnet_prefix;
-volatile const __u32 service_subnet_mask;
+// add minimum Ethernet header size to byte
+//  counts to better reflect actual network usage,
+//  as skb->len does not include Ethernet header    
+#define ETHERNET_HEADER_SIZE 14
 
 /*
  * Keyed by socket cookie.
@@ -341,7 +343,8 @@ int cg_ingress(struct __sk_buff *skb)
         c->have_src = 1;
     }
 
-    __sync_fetch_and_add(&c->rx_bytes, skb->len);
+    __u32 s = skb->len + ETHERNET_HEADER_SIZE;
+    __sync_fetch_and_add(&c->rx_bytes, s);
     return 1;
 }
 
@@ -388,6 +391,7 @@ int cg_egress(struct __sk_buff *skb)
         c->have_src = 1;
     }
 
-    __sync_fetch_and_add(&c->tx_bytes, skb->len);
+    __u32 s = skb->len + ETHERNET_HEADER_SIZE;
+    __sync_fetch_and_add(&c->tx_bytes, s);
     return 1;
 }
