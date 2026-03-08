@@ -20,7 +20,6 @@ import (
 	"github.com/acll19/netledger/internal/agent/cgroup"
 	"github.com/acll19/netledger/internal/agent/kubernetes"
 	"github.com/acll19/netledger/internal/network"
-	"github.com/acll19/netledger/internal/network/byteorder"
 	"github.com/acll19/netledger/internal/payload"
 	"github.com/cilium/ebpf"
 	"github.com/cilium/ebpf/link"
@@ -28,7 +27,7 @@ import (
 	v1 "k8s.io/api/core/v1"
 )
 
-func Run(flushInterval time.Duration, node, server, serviceCidr string, debug bool) error {
+func Run(flushInterval time.Duration, node, server string, debug bool) error {
 	// Remove resource limits for kernels <5.11.
 	if err := rlimit.RemoveMemlock(); err != nil {
 		return fmt.Errorf("removing memlock: %w", err)
@@ -52,22 +51,6 @@ func Run(flushInterval time.Duration, node, server, serviceCidr string, debug bo
 		return fmt.Errorf("load eBPF objects: %w", err)
 	}
 	defer objs.Close()
-
-	ip, ipNet, err := net.ParseCIDR(serviceCidr)
-	if err != nil || ip == nil || ip.To4() == nil {
-		return fmt.Errorf("error parsing service CIDR, %w", err)
-	}
-
-	ipUint := network.IpToUint32(ip)
-	maskUint := network.MaskToUint32(ipNet.Mask)
-
-	if err := spec.Variables["service_subnet_prefix"].Set(byteorder.Htonl(ipUint)); err != nil {
-		return fmt.Errorf("setting service prefix from CIDR: %w", err)
-	}
-
-	if err := spec.Variables["service_subnet_mask"].Set(byteorder.Htonl(maskUint)); err != nil {
-		return fmt.Errorf("setting service mask from CIDR: %w", err)
-	}
 
 	activeLinks := make([]link.Link, 0)
 	cgroupEgressLink, err := bpf.AttachRootCgroup(objs.CgEgress, ebpf.AttachCGroupInetEgress)
