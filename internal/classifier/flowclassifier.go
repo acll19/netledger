@@ -79,62 +79,31 @@ func Classify(data []payload.FlowEntry, opts ClassifyOptions) []FlowLog {
 			SameRegion: srcRegion == dstRegion,
 		}
 
-		if !isInternet && srcPod.Name != "" && dstPod.Name != "" {
-			switch entry.Direction {
-
-			case 0: // egress
-				srcKey := metrics.FlowKey{PodName: srcPod.Name, Namespace: srcPod.Namespace}
-				opts.EgStatistics[srcKey] = metrics.FlowSize{
-					Traffic: opts.EgStatistics[srcKey].Traffic + entry.TxBytes,
-				}
-
-				opts.IngStatistics[srcKey] = metrics.FlowSize{
-					Traffic: opts.IngStatistics[srcKey].Traffic + entry.RxBytes,
-				}
-
-			case 1: // ingress
-				dstKey := metrics.FlowKey{PodName: dstPod.Name, Namespace: dstPod.Namespace}
-				opts.IngStatistics[dstKey] = metrics.FlowSize{
-					Traffic: opts.IngStatistics[dstKey].Traffic + entry.RxBytes,
-				}
-
-				opts.EgStatistics[dstKey] = metrics.FlowSize{
-					Traffic: opts.EgStatistics[dstKey].Traffic + entry.TxBytes,
-				}
+		switch entry.Direction {
+		case 0: // egress
+			flowKey.PodName = srcPod.Name
+			flowKey.Namespace = srcPod.Namespace
+			currentFlow := opts.EgStatistics[flowKey]
+			opts.EgStatistics[flowKey] = metrics.FlowSize{
+				Traffic: entry.TxBytes + currentFlow.Traffic,
 			}
-		} else {
-			// This could be
-			// - internet,
-			// - pod to svc typed ExternalName,
-			// - pod to svc without selectors with endpoint slices to public IPs,
-			// - external initiated requests to NodePort or LoadBalancer services,
-			// - etc.
-			switch entry.Direction {
-			case 0: // egress
-				flowKey.PodName = srcPod.Name
-				flowKey.Namespace = srcPod.Namespace
-				currentFlow := opts.EgStatistics[flowKey]
-				opts.EgStatistics[flowKey] = metrics.FlowSize{
-					Traffic: entry.TxBytes + currentFlow.Traffic,
-				}
 
-				// we count RX for the same pod
-				currentFlow = opts.IngStatistics[flowKey]
-				opts.IngStatistics[flowKey] = metrics.FlowSize{
-					Traffic: entry.RxBytes + currentFlow.Traffic,
-				}
-			case 1: // ingress
-				flowKey.PodName = dstPod.Name
-				flowKey.Namespace = dstPod.Namespace
-				currentFlow := opts.IngStatistics[flowKey]
-				opts.IngStatistics[flowKey] = metrics.FlowSize{
-					Traffic: entry.RxBytes + currentFlow.Traffic,
-				}
+			// we count RX for the same pod
+			currentFlow = opts.IngStatistics[flowKey]
+			opts.IngStatistics[flowKey] = metrics.FlowSize{
+				Traffic: entry.RxBytes + currentFlow.Traffic,
+			}
+		case 1: // ingress
+			flowKey.PodName = dstPod.Name
+			flowKey.Namespace = dstPod.Namespace
+			currentFlow := opts.IngStatistics[flowKey]
+			opts.IngStatistics[flowKey] = metrics.FlowSize{
+				Traffic: entry.RxBytes + currentFlow.Traffic,
+			}
 
-				currentFlow = opts.EgStatistics[flowKey]
-				opts.EgStatistics[flowKey] = metrics.FlowSize{
-					Traffic: entry.TxBytes + currentFlow.Traffic,
-				}
+			currentFlow = opts.EgStatistics[flowKey]
+			opts.EgStatistics[flowKey] = metrics.FlowSize{
+				Traffic: entry.TxBytes + currentFlow.Traffic,
 			}
 		}
 
