@@ -17,7 +17,7 @@ var (
 func main() {
 	flag.Parse()
 
-	fi := 2 * time.Second
+	fi := 1 * time.Second
 	err := agent.Run(fi, node, server, debug)
 	if err != nil {
 		panic(err)
