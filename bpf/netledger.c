@@ -30,7 +30,7 @@ char __license[] SEC("license") = "Dual MIT/GPL";
 
 // add minimum Ethernet header size to byte
 //  counts to better reflect actual network usage,
-//  as skb->len does not include Ethernet header  
+//  as skb->len does not include Ethernet header
 #define ETHERNET_HEADER_SIZE 14
 
 /*
@@ -48,7 +48,7 @@ struct conn_val
     __u16 dst_port;
     __u8 proto;
 
-    /* who initiated the connection */
+    /* 0 egress, 1 ingress */
     __u8 conn_direction;
 
     /* byte counters */
@@ -218,9 +218,14 @@ int tcp_sockops(struct bpf_sock_ops *skops)
 
     /* Connection established (active/egress or passive/ingress) */
     case BPF_SOCK_OPS_ACTIVE_ESTABLISHED_CB:
-    case BPF_SOCK_OPS_PASSIVE_ESTABLISHED_CB:
     {
         handle_conn_established4(c, skops, CONN_POD_ORIGINATED, cookie);
+        break;
+    }
+
+    case BPF_SOCK_OPS_PASSIVE_ESTABLISHED_CB:
+    {
+        handle_conn_established4(c, skops, CONN_EXTERNAL_ORIGINATED, cookie);
         break;
     }
 
