@@ -30,7 +30,7 @@ char __license[] SEC("license") = "Dual MIT/GPL";
 
 // add minimum Ethernet header size to byte
 //  counts to better reflect actual network usage,
-//  as skb->len does not include Ethernet header    
+//  as skb->len does not include Ethernet header  
 #define ETHERNET_HEADER_SIZE 14
 
 /*

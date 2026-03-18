@@ -83,6 +83,7 @@ func Classify(data []payload.FlowEntry, opts ClassifyOptions) []FlowLog {
 		case 0: // egress
 			flowKey.PodName = srcPod.Name
 			flowKey.Namespace = srcPod.Namespace
+			flowKey.PodInitiated = true
 			currentFlow := opts.EgStatistics[flowKey]
 			opts.EgStatistics[flowKey] = metrics.FlowSize{
 				Traffic: entry.TxBytes + currentFlow.Traffic,
