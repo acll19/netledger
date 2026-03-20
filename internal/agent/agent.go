@@ -6,13 +6,13 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"log"
 	"log/slog"
 	"math"
 	"net"
 	"net/http"
 	"os"
 	"os/signal"
+	"strconv"
 	"sync"
 	"syscall"
 	"time"
@@ -28,7 +28,7 @@ import (
 	v1 "k8s.io/api/core/v1"
 )
 
-func Run(flushInterval time.Duration, node, server string, debug bool) error {
+func Run(flushInterval time.Duration, node, server string) error {
 	// Remove resource limits for kernels <5.11.
 	if err := rlimit.RemoveMemlock(); err != nil {
 		return fmt.Errorf("removing memlock: %w", err)
@@ -83,12 +83,12 @@ func Run(flushInterval time.Duration, node, server string, debug bool) error {
 		return fmt.Errorf("attach cgroup skb: %w", err)
 	}
 	activeLinks = append(activeLinks, cgroupSockopsLink)
-	log.Println("Number of active links: ", len(activeLinks))
+	slog.Info("Number of active links", "count", len(activeLinks))
 
 	defer func() {
 		for _, link := range activeLinks {
 			if err := link.Close(); err != nil {
-				slog.Error("error closing link object", "message: ", err.Error())
+				slog.Error("error closing link object", "message", err.Error())
 			}
 		}
 	}()
@@ -122,27 +122,26 @@ func Run(flushInterval time.Duration, node, server string, debug bool) error {
 			slog.Info("Shutting down...")
 			return nil
 		case <-ticker.C:
-			slog.Info("reading data from eBPF maps")
+			slog.Debug("reading data from eBPF maps")
 
 			keys = keys[:size]
 			values = values[:size]
 			opts := &ebpf.BatchOptions{}
 			cursor := new(ebpf.MapBatchCursor)
 			n, err := objs.ConnMap.BatchLookup(cursor, keys, values, opts)
-			slog.Debug("batch lookup result", "n", n, "err", err, "mapSize", objs.ConnMap.MaxEntries())
+			slog.Debug("batch lookup result", "received entries", strconv.Itoa(n), "err", err.Error(), "mapSize", strconv.FormatUint(uint64(objs.ConnMap.MaxEntries()), 10))
 			if n <= 0 {
-				log.Println("no data, skipping")
+				slog.Debug("no data, skipping")
 				continue
 			}
 			if err != nil && !errors.Is(err, ebpf.ErrKeyNotExist) {
-				log.Println("failed to read data:", err)
+				slog.Error("failed to read data", "message", err.Error())
 				continue
 			}
 			keys = keys[:n]
 			values = values[:n]
 
-			// debug
-			log.Println("debug printing", len(keys), "keys", "started with", n, "keys before filtering to host-local pods (", len(keys), ")")
+			slog.Debug("debug printing", "keys", len(keys), "started with", n, "keys before filtering to host-local pods", len(keys))
 			entries := make([]payload.FlowEntry, 0, len(keys))
 
 			for i := range len(keys) {
@@ -181,13 +180,18 @@ func Run(flushInterval time.Duration, node, server string, debug bool) error {
 				pod := podCgroupCache[values[i].CgroupId]
 				if pod == nil {
 					// If the cgroup ID is not in the cache, it means we haven't seen a pod with that cgroup ID yet (or the pod has been deleted)
-					if debug {
-						log.Printf("cgroup ID %d not found in cache\n", values[i].CgroupId)
-					}
+					slog.Debug(fmt.Sprintf("cgroup ID %d not found in cache\n", values[i].CgroupId))
+
 					continue
 				}
-				srcPod = pod.Name
-				srcNs = pod.Namespace
+
+				if values[i].ConnDirection == 0 { // egress
+					dstPod = pod.Name
+					dstNs = pod.Namespace
+				} else { // ingress
+					srcPod = pod.Name
+					srcNs = pod.Namespace
+				}
 
 				sport := values[i].SrcPort
 				dport := values[i].DstPort
@@ -195,19 +199,17 @@ func Run(flushInterval time.Duration, node, server string, debug bool) error {
 				srcAddr := fmt.Sprintf("%s:%d", srcIp.To4().String(), sport)
 				dstAddr := fmt.Sprintf("%s:%d", dstIp.To4().String(), dport)
 
-				if debug {
-					slog.Info(fmt.Sprintf("[Direction %d] %s -> %s: %d tx bytes, %d rx bytes (srcPod: %s/%s, dstPod: %s/%s)\n",
-						values[i].ConnDirection,
-						srcAddr,
-						dstAddr,
-						values[i].TxBytes,
-						values[i].RxBytes,
-						srcNs,
-						srcPod,
-						dstNs,
-						dstPod,
-					))
-				}
+				slog.Debug(fmt.Sprintf("[Direction %d] %s -> %s: %d tx bytes, %d rx bytes (srcPod: %s/%s, dstPod: %s/%s)\n",
+					values[i].ConnDirection,
+					srcAddr,
+					dstAddr,
+					values[i].TxBytes,
+					values[i].RxBytes,
+					srcNs,
+					srcPod,
+					dstNs,
+					dstPod,
+				))
 
 				entry := payload.FlowEntry{
 					Direction:       int(values[i].ConnDirection),
@@ -227,7 +229,7 @@ func Run(flushInterval time.Duration, node, server string, debug bool) error {
 
 			if len(entries) > 0 {
 				go func() {
-					slog.Info(fmt.Sprintf("Sending %d entries to API server\n", len(entries)))
+					slog.Debug(fmt.Sprintf("Sending %d entries to API server\n", len(entries)))
 					serverCtx := context.WithoutCancel(context.Background())
 					err := sendDataToServer(serverCtx, server, entries)
 					if err != nil {
@@ -311,7 +313,7 @@ func onPodAdd(obj any) {
 }
 
 func onPodDelete(obj any) {
-	log.Println("Pod deleted: ", obj.(*v1.Pod).Name)
+	slog.Debug("Pod deleted", "namespace", obj.(*v1.Pod).Namespace, "pod", obj.(*v1.Pod).Name)
 }
 
 func onPodUpdate(oldObj, newObj any) {
@@ -324,25 +326,25 @@ func processPodEvents(ctx context.Context, podChan <-chan podEvent, podCgroupCac
 	for {
 		select {
 		case <-ctx.Done():
-			log.Println("Stopping pod event processor")
+			slog.Info("Stopping pod event processor")
 			return
 		case evt := <-podChan:
 			m.Lock()
 			switch evt.eventType {
 			case "add":
-				slog.Info("Pod added", "namespace", evt.pod.Namespace, "pod", evt.pod.Name)
+				slog.Debug("Pod added", "namespace", evt.pod.Namespace, "pod", evt.pod.Name)
 				err := cgroup.CacheCgroupIDToPod(podCgroupCache, evt.pod)
 				if err != nil {
 					// slog.Error("Error caching cgroup ID to pod", "error", err.Error())
 				}
 			case "update":
-				slog.Info("Pod updated", "namespace", evt.pod.Namespace, "pod", evt.pod.Name)
+				slog.Debug("Pod updated", "namespace", evt.pod.Namespace, "pod", evt.pod.Name)
 				err := cgroup.CacheCgroupIDToPod(podCgroupCache, evt.pod)
 				if err != nil {
 					slog.Error("Error caching cgroup ID to pod", "error", err.Error())
 				}
 			case "delete":
-				slog.Info("Pod deleted", "namespace", evt.pod.Namespace, "pod", evt.pod.Name)
+				slog.Debug("Pod deleted", "namespace", evt.pod.Namespace, "pod", evt.pod.Name)
 			default:
 				slog.Error("Unknown event type", "eventType", evt.eventType, "namespace", evt.pod.Namespace, "pod", evt.pod.Name)
 			}

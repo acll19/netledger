@@ -52,12 +52,8 @@ func Classify(data []payload.FlowEntry, opts ClassifyOptions) []FlowLog {
 		var srcZone, dstZone, srcRegion, dstRegion string
 		var srcParsed, dstParsed netip.Addr
 
-		if srcPod.Name == "" {
-			srcPod, _ = searchPod(srcIp, entry, opts.PodIpIndex)
-		}
-		if dstPod.Name == "" {
-			dstPod, _ = searchPod(dstIp, entry, opts.PodIpIndex)
-		}
+		srcPod, _ = searchPod(srcIp, entry, opts.PodIpIndex)
+		dstPod, _ = searchPod(dstIp, entry, opts.PodIpIndex)
 
 		srcPodInfo := opts.PodIndex[srcPod]
 		srcNode := srcPodInfo.Node

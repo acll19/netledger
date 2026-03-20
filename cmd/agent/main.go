@@ -8,17 +8,15 @@ import (
 )
 
 var (
-	server      string
-	serviceCidr string
-	node        string
-	debug       bool
+	server string
+	node   string
 )
 
 func main() {
 	flag.Parse()
 
 	fi := 1 * time.Second
-	err := agent.Run(fi, node, server, debug)
+	err := agent.Run(fi, node, server)
 	if err != nil {
 		panic(err)
 	}
@@ -26,7 +24,5 @@ func main() {
 
 func init() {
 	flag.StringVar(&server, "server", "", "The classifier path to send flows to")
-	flag.StringVar(&serviceCidr, "serviceCidr", "", "The cluster service CIDR")
 	flag.StringVar(&node, "node", "", "Agent node name")
-	flag.BoolVar(&debug, "debug", false, "Enable debug logging")
 }
