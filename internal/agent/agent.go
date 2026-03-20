@@ -181,16 +181,15 @@ func Run(flushInterval time.Duration, node, server string) error {
 				if pod == nil {
 					// If the cgroup ID is not in the cache, it means we haven't seen a pod with that cgroup ID yet (or the pod has been deleted)
 					slog.Debug(fmt.Sprintf("cgroup ID %d not found in cache", values[i].CgroupId))
-
 					continue
 				}
 
 				if values[i].ConnDirection == 0 { // egress
-					dstPod = pod.Name
-					dstNs = pod.Namespace
-				} else { // ingress
 					srcPod = pod.Name
 					srcNs = pod.Namespace
+				} else { // ingress
+					dstPod = pod.Name
+					dstNs = pod.Namespace
 				}
 
 				sport := values[i].SrcPort
