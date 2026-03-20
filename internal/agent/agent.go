@@ -180,7 +180,7 @@ func Run(flushInterval time.Duration, node, server string) error {
 				pod := podCgroupCache[values[i].CgroupId]
 				if pod == nil {
 					// If the cgroup ID is not in the cache, it means we haven't seen a pod with that cgroup ID yet (or the pod has been deleted)
-					slog.Debug(fmt.Sprintf("cgroup ID %d not found in cache\n", values[i].CgroupId))
+					slog.Debug(fmt.Sprintf("cgroup ID %d not found in cache", values[i].CgroupId))
 
 					continue
 				}
@@ -199,7 +199,7 @@ func Run(flushInterval time.Duration, node, server string) error {
 				srcAddr := fmt.Sprintf("%s:%d", srcIp.To4().String(), sport)
 				dstAddr := fmt.Sprintf("%s:%d", dstIp.To4().String(), dport)
 
-				slog.Debug(fmt.Sprintf("[Direction %d] %s -> %s: %d tx bytes, %d rx bytes (srcPod: %s/%s, dstPod: %s/%s)\n",
+				slog.Debug(fmt.Sprintf("[Direction %d] %s -> %s: %d tx bytes, %d rx bytes (srcPod: %s/%s, dstPod: %s/%s)",
 					values[i].ConnDirection,
 					srcAddr,
 					dstAddr,
@@ -229,7 +229,7 @@ func Run(flushInterval time.Duration, node, server string) error {
 
 			if len(entries) > 0 {
 				go func() {
-					slog.Debug(fmt.Sprintf("Sending %d entries to API server\n", len(entries)))
+					slog.Debug(fmt.Sprintf("Sending %d entries to API server", len(entries)))
 					serverCtx := context.WithoutCancel(context.Background())
 					err := sendDataToServer(serverCtx, server, entries)
 					if err != nil {
