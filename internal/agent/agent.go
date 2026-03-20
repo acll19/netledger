@@ -99,7 +99,8 @@ func Run(flushInterval time.Duration, node, server string) error {
 	go kubernetes.WatchPods(onPodAdd, onPodDelete, onPodUpdate)
 
 	podCgroupCache := make(map[uint64]*v1.Pod)
-	go processPodEvents(ctx, podChannel, podCgroupCache)
+	cgroupPodCache := make(map[string][]uint64) // map of pod UID to slice of cgroup IDs for handling pod deletions
+	go processPodEvents(ctx, podChannel, podCgroupCache, cgroupPodCache)
 
 	// Channel to listen to interrupt signals
 	stop := make(chan os.Signal, 1)
@@ -320,7 +321,11 @@ func onPodUpdate(oldObj, newObj any) {
 	podChannel <- podEvent{eventType: "update", pod: newPod}
 }
 
-func processPodEvents(ctx context.Context, podChan <-chan podEvent, podCgroupCache map[uint64]*v1.Pod) {
+func processPodEvents(
+	ctx context.Context, podChan <-chan podEvent,
+	podCgroupCache map[uint64]*v1.Pod,
+	cgroupPodCache map[string][]uint64) {
+
 	m := sync.RWMutex{}
 	for {
 		select {
@@ -332,18 +337,25 @@ func processPodEvents(ctx context.Context, podChan <-chan podEvent, podCgroupCac
 			switch evt.eventType {
 			case "add":
 				slog.Debug("Pod added", "namespace", evt.pod.Namespace, "pod", evt.pod.Name)
-				err := cgroup.CacheCgroupIDToPod(podCgroupCache, evt.pod)
+				err := cgroup.CacheCgroupIDToPod(evt.pod, podCgroupCache, cgroupPodCache)
 				if err != nil {
-					// slog.Error("Error caching cgroup ID to pod", "error", err.Error())
+					slog.Error("Error caching cgroup ID to pod", "error", err.Error())
 				}
 			case "update":
 				slog.Debug("Pod updated", "namespace", evt.pod.Namespace, "pod", evt.pod.Name)
-				err := cgroup.CacheCgroupIDToPod(podCgroupCache, evt.pod)
+				err := cgroup.CacheCgroupIDToPod(evt.pod, podCgroupCache, cgroupPodCache)
 				if err != nil {
 					slog.Error("Error caching cgroup ID to pod", "error", err.Error())
 				}
 			case "delete":
 				slog.Debug("Pod deleted", "namespace", evt.pod.Namespace, "pod", evt.pod.Name)
+				uid := string(evt.pod.UID)
+				if cgroupIDs, exists := cgroupPodCache[uid]; exists {
+					for _, cgroupID := range cgroupIDs {
+						delete(podCgroupCache, cgroupID)
+					}
+					delete(cgroupPodCache, uid)
+				}
 			default:
 				slog.Error("Unknown event type", "eventType", evt.eventType, "namespace", evt.pod.Namespace, "pod", evt.pod.Name)
 			}
