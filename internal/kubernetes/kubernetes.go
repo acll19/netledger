@@ -6,8 +6,12 @@ import (
 	"os"
 	"path/filepath"
 
+	v1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/fields"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
+	"k8s.io/client-go/tools/cache"
 	"k8s.io/client-go/tools/clientcmd"
 )
 
@@ -45,4 +49,25 @@ func GetKubernetesClient() (*kubernetes.Clientset, error) {
 	}
 
 	return clientset, nil
+}
+
+func WatchPods(client kubernetes.Interface, onPodAdd, onPodDelete func(obj any), onPodUpdate func(oldObj, newObj any)) {
+	watchList := cache.NewListWatchFromClient(
+		client.CoreV1().RESTClient(),
+		"pods",
+		metav1.NamespaceAll,
+		fields.Everything(),
+	)
+
+	_, controller := cache.NewInformerWithOptions(cache.InformerOptions{
+		ListerWatcher: watchList,
+		ObjectType:    &v1.Pod{},
+		Handler: cache.ResourceEventHandlerFuncs{
+			AddFunc:    onPodAdd,
+			UpdateFunc: onPodUpdate,
+			DeleteFunc: onPodDelete,
+		},
+	})
+
+	controller.Run(make(chan struct{}))
 }

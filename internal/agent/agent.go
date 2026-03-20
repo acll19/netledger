@@ -13,6 +13,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"sync"
 	"syscall"
 	"time"
 
@@ -95,10 +96,10 @@ func Run(flushInterval time.Duration, node, server string, debug bool) error {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	informer, err := kubernetes.SetupPodInformer(ctx, node)
-	if err != nil {
-		return fmt.Errorf("error setting up informer: %w", err)
-	}
+	go kubernetes.WatchPods(onPodAdd, onPodDelete, onPodUpdate)
+
+	podCgroupCache := make(map[uint64]*v1.Pod)
+	go processPodEvents(ctx, podChannel, podCgroupCache)
 
 	// Channel to listen to interrupt signals
 	stop := make(chan os.Signal, 1)
@@ -140,8 +141,6 @@ func Run(flushInterval time.Duration, node, server string, debug bool) error {
 			keys = keys[:n]
 			values = values[:n]
 
-			podsOnHost := kubernetes.GetPods(informer)
-
 			// debug
 			log.Println("debug printing", len(keys), "keys", "started with", n, "keys before filtering to host-local pods (", len(keys), ")")
 			entries := make([]payload.FlowEntry, 0, len(keys))
@@ -179,16 +178,16 @@ func Run(flushInterval time.Duration, node, server string, debug bool) error {
 				dstIp := network.Uint32ToIP(values[i].DstIp)
 
 				var srcPod, srcNs, dstPod, dstNs string
-				p := searchPod(srcIp.To4().String(), values[i], podsOnHost)
-				if p != nil {
-					srcPod = p.Name
-					srcNs = p.Namespace
+				pod := podCgroupCache[values[i].CgroupId]
+				if pod == nil {
+					// If the cgroup ID is not in the cache, it means we haven't seen a pod with that cgroup ID yet (or the pod has been deleted)
+					if debug {
+						log.Printf("cgroup ID %d not found in cache\n", values[i].CgroupId)
+					}
+					continue
 				}
-				p = searchPod(dstIp.To4().String(), values[i], podsOnHost)
-				if p != nil {
-					dstPod = p.Name
-					dstNs = p.Namespace
-				}
+				srcPod = pod.Name
+				srcNs = pod.Namespace
 
 				sport := values[i].SrcPort
 				dport := values[i].DstPort
@@ -240,25 +239,6 @@ func Run(flushInterval time.Duration, node, server string, debug bool) error {
 			removeClosedConnections(lastSeen, keys, values, objs.ConnMap)
 		}
 	}
-}
-
-func searchPod(ip string, connVal bpf.NetLedgerConnVal, podsOnHost []*v1.Pod) *v1.Pod {
-	srcIp := network.Uint32ToIP(connVal.SrcIp)
-	if connVal.ConnDirection == 0 && srcIp.To4().String() == ip {
-		pod, _ := cgroup.GetPodByCgroupID(connVal.CgroupId, podsOnHost)
-		if pod != nil {
-			return pod
-		}
-	}
-
-	dstIp := network.Uint32ToIP(connVal.DstIp)
-	if connVal.ConnDirection == 1 && dstIp.To4().String() == ip {
-		pod, _ := cgroup.GetPodByCgroupID(connVal.CgroupId, podsOnHost)
-		if pod != nil {
-			return pod
-		}
-	}
-	return nil
 }
 
 var httpClient = &http.Client{
@@ -313,6 +293,60 @@ func removeClosedConnections(
 				slog.Error("error deleting closed connection from map", "key", currentConnsKeys[i], "error", err.Error())
 			}
 			delete(lastSeen, currentConnsKeys[i])
+		}
+	}
+}
+
+// =====================================
+// =====================================
+type podEvent struct {
+	eventType string
+	pod       *v1.Pod
+}
+
+var podChannel = make(chan podEvent, 100)
+
+func onPodAdd(obj any) {
+	podChannel <- podEvent{eventType: "add", pod: obj.(*v1.Pod)}
+}
+
+func onPodDelete(obj any) {
+	log.Println("Pod deleted: ", obj.(*v1.Pod).Name)
+}
+
+func onPodUpdate(oldObj, newObj any) {
+	newPod := newObj.(*v1.Pod)
+	podChannel <- podEvent{eventType: "update", pod: newPod}
+}
+
+func processPodEvents(ctx context.Context, podChan <-chan podEvent, podCgroupCache map[uint64]*v1.Pod) {
+	m := sync.RWMutex{}
+	for {
+		select {
+		case <-ctx.Done():
+			log.Println("Stopping pod event processor")
+			return
+		case evt := <-podChan:
+			m.Lock()
+			switch evt.eventType {
+			case "add":
+				slog.Info("Pod added", "namespace", evt.pod.Namespace, "pod", evt.pod.Name)
+				err := cgroup.CacheCgroupIDToPod(podCgroupCache, evt.pod)
+				if err != nil {
+					// slog.Error("Error caching cgroup ID to pod", "error", err.Error())
+				}
+			case "update":
+				slog.Info("Pod updated", "namespace", evt.pod.Namespace, "pod", evt.pod.Name)
+				err := cgroup.CacheCgroupIDToPod(podCgroupCache, evt.pod)
+				if err != nil {
+					slog.Error("Error caching cgroup ID to pod", "error", err.Error())
+				}
+			case "delete":
+				slog.Info("Pod deleted", "namespace", evt.pod.Namespace, "pod", evt.pod.Name)
+			default:
+				slog.Error("Unknown event type", "eventType", evt.eventType, "namespace", evt.pod.Namespace, "pod", evt.pod.Name)
+			}
+			m.Unlock()
 		}
 	}
 }
