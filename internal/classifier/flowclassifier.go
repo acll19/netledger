@@ -29,7 +29,7 @@ type FlowLog struct {
 	DstIP     netip.Addr
 	DstPort   int
 	Direction int
-	Bytes     int
+	Bytes     uint64
 }
 
 type ClassifyOptions struct {
@@ -42,9 +42,9 @@ type ClassifyOptions struct {
 	EgStatistics  metrics.StatisticMap
 }
 
-func Classify(data []payload.FlowEntry, opts ClassifyOptions) []FlowLog {
-	flowLogs := make([]FlowLog, 0, len(data))
-	for _, entry := range data {
+func Classify(data payload.Flow, opts ClassifyOptions) []FlowLog {
+	flowLogs := make([]FlowLog, 0, len(data.Entries))
+	for _, entry := range data.Entries {
 		var srcPod, dstPod metrics.PodKey
 		srcIp := entry.SrcIP
 		dstIp := entry.DstIP
@@ -85,7 +85,6 @@ func Classify(data []payload.FlowEntry, opts ClassifyOptions) []FlowLog {
 				Traffic: entry.TxBytes + currentFlow.Traffic,
 			}
 
-			// we count RX for the same pod
 			currentFlow = opts.IngStatistics[flowKey]
 			opts.IngStatistics[flowKey] = metrics.FlowSize{
 				Traffic: entry.RxBytes + currentFlow.Traffic,
@@ -112,7 +111,7 @@ func Classify(data []payload.FlowEntry, opts ClassifyOptions) []FlowLog {
 			DstIP:     dstParsed,
 			DstPort:   int(entry.DstPort),
 			Direction: entry.Direction,
-			Bytes:     int(entry.TxBytes) + int(entry.RxBytes),
+			Bytes:     entry.TxBytes + entry.RxBytes,
 		})
 	}
 	return flowLogs

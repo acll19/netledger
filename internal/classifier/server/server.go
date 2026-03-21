@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"log/slog"
 	"net"
 	"net/http"
 	"strconv"
@@ -24,30 +25,38 @@ import (
 	ck8s "github.com/acll19/netledger/internal/classifier/kubernetes"
 )
 
+type registeredAgent struct {
+	node        string
+	startupTime int64
+	lastSeen    time.Time
+}
+
 type Server struct {
-	clientset       *kubernetes.Clientset
-	podIpIndex      map[uint32]metrics.PodKey // maps Pod IPv4s to Pod name
-	nodeIpIndex     map[uint32]string         // maps Node IPv4s to Node name (for hostNetwork pods)
-	podIndex        map[metrics.PodKey]classifier.PodInfo
-	nodeIndex       map[string]classifier.NodeInfo
-	ingStatistics   metrics.StatisticMap
-	egStatistics    metrics.StatisticMap
-	svcInformer     cache.SharedIndexInformer
-	epSliceInformer cache.SharedIndexInformer
-	serviceIpNet    *net.IPNet
-	mutex           sync.RWMutex
+	clientset        *kubernetes.Clientset
+	podIpIndex       map[uint32]metrics.PodKey // maps Pod IPv4s to Pod name
+	nodeIpIndex      map[uint32]string         // maps Node IPv4s to Node name (for hostNetwork pods)
+	podIndex         map[metrics.PodKey]classifier.PodInfo
+	nodeIndex        map[string]classifier.NodeInfo
+	ingStatistics    metrics.StatisticMap
+	egStatistics     metrics.StatisticMap
+	svcInformer      cache.SharedIndexInformer
+	epSliceInformer  cache.SharedIndexInformer
+	serviceIpNet     *net.IPNet
+	mutex            sync.RWMutex
+	registeredAgents map[string]*registeredAgent // map to track registered agents by node name
 }
 
 func NewServer(clientset *kubernetes.Clientset, serviceIpNet *net.IPNet) *Server {
 	server := &Server{
-		clientset:     clientset,
-		serviceIpNet:  serviceIpNet,
-		podIpIndex:    map[uint32]metrics.PodKey{},
-		nodeIpIndex:   map[uint32]string{},
-		podIndex:      map[metrics.PodKey]classifier.PodInfo{},
-		nodeIndex:     map[string]classifier.NodeInfo{},
-		ingStatistics: metrics.StatisticMap{},
-		egStatistics:  metrics.StatisticMap{},
+		clientset:        clientset,
+		serviceIpNet:     serviceIpNet,
+		podIpIndex:       map[uint32]metrics.PodKey{},
+		nodeIpIndex:      map[uint32]string{},
+		podIndex:         map[metrics.PodKey]classifier.PodInfo{},
+		nodeIndex:        map[string]classifier.NodeInfo{},
+		ingStatistics:    metrics.StatisticMap{},
+		egStatistics:     metrics.StatisticMap{},
+		registeredAgents: map[string]*registeredAgent{},
 	}
 	return server
 }
@@ -71,21 +80,44 @@ func (s *Server) Start(ctx context.Context, reg *prometheus.Registry) error {
 	}
 
 	go func() {
-		log.Println("Starting server on port 8080...")
+		slog.Info("Starting server on port 8080...")
 		if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 			log.Fatalf("HTTP server error: %v", err)
 		}
 	}()
 
+	go s.cleanupRegisteredAgents(ctx)
+
 	// Block until SIGTERM
 	<-ctx.Done()
-	log.Println("Shutdown signal received")
+	slog.Info("Shutdown signal received")
 
 	// Give outstanding requests time to finish
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
 	return server.Shutdown(shutdownCtx)
+}
+
+func (s *Server) cleanupRegisteredAgents(ctx context.Context) {
+	ticker := time.NewTicker(1 * time.Minute)
+	defer ticker.Stop()
+
+	select {
+	case <-ctx.Done():
+		slog.Info("Stopping registered agent cleanup")
+		return
+	case <-ticker.C:
+		s.mutex.Lock()
+		threadhold := 60 * time.Minute // TODO: make this configurable
+		for node, agent := range s.registeredAgents {
+			if time.Since(agent.lastSeen) > threadhold {
+				slog.Info("Removing registered agent due to inactivity", "node", node)
+				delete(s.registeredAgents, node)
+			}
+		}
+		s.mutex.Unlock()
+	}
 }
 
 func (s *Server) WatchPods() {
@@ -297,6 +329,27 @@ func (s *Server) handlePayload(w http.ResponseWriter, r *http.Request) {
 		EgStatistics:  s.egStatistics,
 	}
 
+	// Do not classify flows from agents that have recently restarted to protect against delta spikes in
+	// traffic due to agent restarts.
+	agent := data.AgentNode
+	startupTime := data.StartupTime
+	if _, exists := s.registeredAgents[agent]; !exists {
+		slog.Debug(fmt.Sprintf("Registering new agent %s with startup time %d", agent, startupTime))
+		s.registeredAgents[agent] = &registeredAgent{
+			node:        agent,
+			startupTime: startupTime,
+			lastSeen:    time.Now(),
+		}
+	} else {
+		s.registeredAgents[agent].lastSeen = time.Now()
+		ra := s.registeredAgents[agent]
+		if startupTime != ra.startupTime {
+			slog.Info(fmt.Sprintf("Skipping data from agent %s due to restart detected (received: %d, registered: %d)", agent, startupTime, ra.startupTime))
+			s.registeredAgents[agent].startupTime = startupTime
+			return
+		}
+	}
+
 	s.mutex.Lock()
 	flowLogs := classifier.Classify(
 		data,
@@ -305,15 +358,16 @@ func (s *Server) handlePayload(w http.ResponseWriter, r *http.Request) {
 	s.mutex.Unlock()
 
 	for _, fl := range flowLogs {
-		log.Println(
+		slog.Info( // TODO: change to DEBUG once logger logic is in place
+			"Classified flow",
 			"source",
 			fmt.Sprintf("%s(%s:%d)", fl.Src, fl.SrcIP, fl.SrcPort),
 			"destination",
 			fmt.Sprintf("%s(%s:%d)", fl.Dst, fl.DstIP, fl.DstPort),
 			"direction",
-			fl.Direction,
-			"bytes =",
-			strconv.Itoa(fl.Bytes),
+			strconv.Itoa(fl.Direction),
+			"bytes",
+			strconv.FormatUint(fl.Bytes, 10),
 		)
 	}
 }

@@ -28,7 +28,7 @@ import (
 	v1 "k8s.io/api/core/v1"
 )
 
-func Run(flushInterval time.Duration, node, server string) error {
+func Run(flushInterval time.Duration, node, server string, startupTime int64) error {
 	// Remove resource limits for kernels <5.11.
 	if err := rlimit.RemoveMemlock(); err != nil {
 		return fmt.Errorf("removing memlock: %w", err)
@@ -174,6 +174,10 @@ func Run(flushInterval time.Duration, node, server string) error {
 				}
 				lastSeen[keys[i]] = values[i]
 
+				if tx == 0 && rx == 0 {
+					continue
+				}
+
 				srcIp := network.Uint32ToIP(values[i].SrcIp)
 				dstIp := network.Uint32ToIP(values[i].DstIp)
 
@@ -231,7 +235,7 @@ func Run(flushInterval time.Duration, node, server string) error {
 				go func() {
 					slog.Debug(fmt.Sprintf("Sending %d entries to API server", len(entries)))
 					serverCtx := context.WithoutCancel(context.Background())
-					err := sendDataToServer(serverCtx, server, entries)
+					err := sendDataToServer(serverCtx, server, node, entries, startupTime)
 					if err != nil {
 						slog.Error(err.Error())
 					}
@@ -257,8 +261,12 @@ var httpClient = &http.Client{
 	},
 }
 
-func sendDataToServer(ctx context.Context, server string, flowEntries []payload.FlowEntry) error {
-	content := payload.Encode(flowEntries)
+func sendDataToServer(ctx context.Context, server, node string, flowEntries []payload.FlowEntry, startupTime int64) error {
+	content := payload.Encode(payload.Flow{
+		AgentNode:   node,
+		StartupTime: startupTime,
+		Entries:     flowEntries,
+	})
 	req, err := http.NewRequest("POST", server, bytes.NewReader(content))
 	if err != nil {
 		return fmt.Errorf("new request: %w", err)

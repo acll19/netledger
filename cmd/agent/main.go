@@ -20,7 +20,8 @@ func main() {
 	setupLogger(logLevel)
 
 	fi := 1 * time.Second
-	err := agent.Run(fi, node, server)
+	startupTime := time.Now().Unix()
+	err := agent.Run(fi, node, server, startupTime)
 	if err != nil {
 		panic(err)
 	}

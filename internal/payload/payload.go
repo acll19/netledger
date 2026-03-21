@@ -5,35 +5,25 @@ import (
 	"encoding/json"
 )
 
-// Key for the eBPF map representing IP pairs
-type IPKey struct {
-	Cgroupid  uint64
-	SrcIP     uint32
-	DstIP     uint32
-	SrcPort   uint16
-	DstPort   uint16
-	Direction uint8 // 0 = egress, 1 = ingress
-	_         [3]byte
-}
-
-// Value for the eBPF map representing total packet sizes
-type IPValue struct {
-	PacketSize uint64
-}
-
-func Encode(flowEntries []FlowEntry) []byte {
+func Encode(flowEntries Flow) []byte {
 	buf := new(bytes.Buffer)
 	json.NewEncoder(buf).Encode(flowEntries)
 	return buf.Bytes()
 }
 
-func Decode(data []byte) ([]FlowEntry, error) {
-	var flowEntries []FlowEntry
-	err := json.Unmarshal(data, &flowEntries)
+func Decode(data []byte) (Flow, error) {
+	var flow Flow
+	err := json.Unmarshal(data, &flow)
 	if err != nil {
-		return nil, err
+		return Flow{}, err
 	}
-	return flowEntries, nil
+	return flow, nil
+}
+
+type Flow struct {
+	AgentNode   string      `json:"agentNode"`
+	StartupTime int64       `json:"timestamp"`
+	Entries     []FlowEntry `json:"entries"`
 }
 
 type FlowEntry struct {
