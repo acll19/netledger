@@ -2,11 +2,10 @@ package main
 
 import (
 	"flag"
-	"log/slog"
-	"os"
 	"time"
 
 	"github.com/acll19/netledger/internal/agent"
+	"github.com/acll19/netledger/internal/log"
 )
 
 var (
@@ -17,7 +16,7 @@ var (
 
 func main() {
 	flag.Parse()
-	setupLogger(logLevel)
+	log.SetupLogger(logLevel)
 
 	fi := 1 * time.Second
 	startupTime := time.Now().Unix()
@@ -25,30 +24,6 @@ func main() {
 	if err != nil {
 		panic(err)
 	}
-}
-
-func setupLogger(logLevel string) {
-	var logLevelOpt slog.Level
-	switch logLevel {
-	case "debug":
-		logLevelOpt = slog.LevelDebug
-	case "info":
-		logLevelOpt = slog.LevelInfo
-	case "warn":
-		logLevelOpt = slog.LevelWarn
-	case "error":
-		logLevelOpt = slog.LevelError
-	default:
-		logLevelOpt = slog.LevelInfo
-	}
-
-	dl := slog.New(
-		slog.NewJSONHandler(
-			os.Stdout,
-			&slog.HandlerOptions{Level: logLevelOpt},
-		),
-	)
-	slog.SetDefault(dl)
 }
 
 func init() {

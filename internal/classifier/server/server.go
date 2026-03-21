@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"io"
-	"log"
 	"log/slog"
 	"net"
 	"net/http"
@@ -32,31 +31,31 @@ type registeredAgent struct {
 }
 
 type Server struct {
-	clientset        *kubernetes.Clientset
-	podIpIndex       map[uint32]metrics.PodKey // maps Pod IPv4s to Pod name
-	nodeIpIndex      map[uint32]string         // maps Node IPv4s to Node name (for hostNetwork pods)
-	podIndex         map[metrics.PodKey]classifier.PodInfo
-	nodeIndex        map[string]classifier.NodeInfo
-	ingStatistics    metrics.StatisticMap
-	egStatistics     metrics.StatisticMap
-	svcInformer      cache.SharedIndexInformer
-	epSliceInformer  cache.SharedIndexInformer
-	serviceIpNet     *net.IPNet
-	mutex            sync.RWMutex
-	registeredAgents map[string]*registeredAgent // map to track registered agents by node name
+	clientset       *kubernetes.Clientset
+	podIpIndex      map[uint32]metrics.PodKey // maps Pod IPv4s to Pod name
+	nodeIpIndex     map[uint32]string         // maps Node IPv4s to Node name (for hostNetwork pods)
+	podIndex        map[metrics.PodKey]classifier.PodInfo
+	nodeIndex       map[string]classifier.NodeInfo
+	ingStatistics   metrics.StatisticMap
+	egStatistics    metrics.StatisticMap
+	svcInformer     cache.SharedIndexInformer
+	epSliceInformer cache.SharedIndexInformer
+	serviceIpNet    *net.IPNet
+	mutex           sync.RWMutex
+	agentsHeartBeat map[string]*registeredAgent // map to track registered agents by node name
 }
 
 func NewServer(clientset *kubernetes.Clientset, serviceIpNet *net.IPNet) *Server {
 	server := &Server{
-		clientset:        clientset,
-		serviceIpNet:     serviceIpNet,
-		podIpIndex:       map[uint32]metrics.PodKey{},
-		nodeIpIndex:      map[uint32]string{},
-		podIndex:         map[metrics.PodKey]classifier.PodInfo{},
-		nodeIndex:        map[string]classifier.NodeInfo{},
-		ingStatistics:    metrics.StatisticMap{},
-		egStatistics:     metrics.StatisticMap{},
-		registeredAgents: map[string]*registeredAgent{},
+		clientset:       clientset,
+		serviceIpNet:    serviceIpNet,
+		podIpIndex:      map[uint32]metrics.PodKey{},
+		nodeIpIndex:     map[uint32]string{},
+		podIndex:        map[metrics.PodKey]classifier.PodInfo{},
+		nodeIndex:       map[string]classifier.NodeInfo{},
+		ingStatistics:   metrics.StatisticMap{},
+		egStatistics:    metrics.StatisticMap{},
+		agentsHeartBeat: map[string]*registeredAgent{},
 	}
 	return server
 }
@@ -82,11 +81,11 @@ func (s *Server) Start(ctx context.Context, reg *prometheus.Registry) error {
 	go func() {
 		slog.Info("Starting server on port 8080...")
 		if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-			log.Fatalf("HTTP server error: %v", err)
+			slog.Error("HTTP server error", "error", err)
 		}
 	}()
 
-	go s.cleanupRegisteredAgents(ctx)
+	go s.cleanupDeadAgents(ctx)
 
 	// Block until SIGTERM
 	<-ctx.Done()
@@ -99,7 +98,7 @@ func (s *Server) Start(ctx context.Context, reg *prometheus.Registry) error {
 	return server.Shutdown(shutdownCtx)
 }
 
-func (s *Server) cleanupRegisteredAgents(ctx context.Context) {
+func (s *Server) cleanupDeadAgents(ctx context.Context) {
 	ticker := time.NewTicker(1 * time.Minute)
 	defer ticker.Stop()
 
@@ -110,10 +109,10 @@ func (s *Server) cleanupRegisteredAgents(ctx context.Context) {
 	case <-ticker.C:
 		s.mutex.Lock()
 		threadhold := 60 * time.Minute // TODO: make this configurable
-		for node, agent := range s.registeredAgents {
+		for node, agent := range s.agentsHeartBeat {
 			if time.Since(agent.lastSeen) > threadhold {
 				slog.Info("Removing registered agent due to inactivity", "node", node)
-				delete(s.registeredAgents, node)
+				delete(s.agentsHeartBeat, node)
 			}
 		}
 		s.mutex.Unlock()
@@ -147,7 +146,7 @@ func (s *Server) handlePod(obj any) {
 	for _, podIP := range pod.Status.PodIPs {
 		ip := net.ParseIP(podIP.IP)
 		if ip == nil || ip.To4() == nil {
-			log.Println("ip is not IPv4, currently only IPv4 is supported")
+			slog.Warn("ip is not IPv4, currently only IPv4 is supported")
 			continue
 		}
 
@@ -298,7 +297,7 @@ func (s *Server) onNodeDelete(obj any) {
 	}
 	delete(s.nodeIndex, node.Name)
 	s.mutex.Unlock()
-	log.Printf("Node deleted: %s", node.Name)
+	slog.Debug("Node deleted", "name", node.Name)
 }
 
 func (s *Server) handlePayload(w http.ResponseWriter, r *http.Request) {
@@ -333,19 +332,19 @@ func (s *Server) handlePayload(w http.ResponseWriter, r *http.Request) {
 	// traffic due to agent restarts.
 	agent := data.AgentNode
 	startupTime := data.StartupTime
-	if _, exists := s.registeredAgents[agent]; !exists {
+	if _, exists := s.agentsHeartBeat[agent]; !exists {
 		slog.Debug(fmt.Sprintf("Registering new agent %s with startup time %d", agent, startupTime))
-		s.registeredAgents[agent] = &registeredAgent{
+		s.agentsHeartBeat[agent] = &registeredAgent{
 			node:        agent,
 			startupTime: startupTime,
 			lastSeen:    time.Now(),
 		}
 	} else {
-		s.registeredAgents[agent].lastSeen = time.Now()
-		ra := s.registeredAgents[agent]
+		s.agentsHeartBeat[agent].lastSeen = time.Now()
+		ra := s.agentsHeartBeat[agent]
 		if startupTime != ra.startupTime {
 			slog.Info(fmt.Sprintf("Skipping data from agent %s due to restart detected (received: %d, registered: %d)", agent, startupTime, ra.startupTime))
-			s.registeredAgents[agent].startupTime = startupTime
+			s.agentsHeartBeat[agent].startupTime = startupTime
 			return
 		}
 	}
