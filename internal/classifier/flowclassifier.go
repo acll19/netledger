@@ -2,6 +2,7 @@ package classifier
 
 import (
 	"fmt"
+	"log/slog"
 	"net"
 	"net/netip"
 
@@ -40,6 +41,7 @@ type ClassifyOptions struct {
 	ServiceIpNet  *net.IPNet
 	IngStatistics metrics.StatisticMap
 	EgStatistics  metrics.StatisticMap
+	Config        Config
 }
 
 func Classify(data payload.Flow, opts ClassifyOptions) []FlowLog {
@@ -67,16 +69,18 @@ func Classify(data payload.Flow, opts ClassifyOptions) []FlowLog {
 
 		srcParsed, _ = netip.ParseAddr(srcIp)
 		dstParsed, _ = netip.ParseAddr(dstIp)
-		isInternet := network.IsInternetIP(srcParsed) || network.IsInternetIP(dstParsed)
 
-		flowKey := metrics.FlowKey{
-			Internet:   isInternet,
-			SameZone:   srcZone == dstZone,
-			SameRegion: srcRegion == dstRegion,
-		}
-
+		flowKey := metrics.FlowKey{}
 		switch entry.Direction {
-		case 0: // egress
+		case network.Egress:
+			classified := classify(dstIp, srcRegion, srcZone, &flowKey, opts.Config)
+			if !classified {
+				isInternet := network.IsInternetIP(dstParsed)
+				flowKey.Internet = isInternet
+				flowKey.SameRegion = srcRegion == dstRegion
+				flowKey.SameZone = srcZone == dstZone
+			}
+
 			flowKey.PodName = srcPod.Name
 			flowKey.Namespace = srcPod.Namespace
 			flowKey.PodInitiated = true
@@ -89,7 +93,15 @@ func Classify(data payload.Flow, opts ClassifyOptions) []FlowLog {
 			opts.IngStatistics[flowKey] = metrics.FlowSize{
 				Traffic: entry.RxBytes + currentFlow.Traffic,
 			}
-		case 1: // ingress
+		case network.Ingress:
+			classified := classify(srcIp, dstRegion, dstZone, &flowKey, opts.Config)
+			if !classified {
+				isInternet := network.IsInternetIP(srcParsed)
+				flowKey.Internet = isInternet
+				flowKey.SameRegion = srcRegion == dstRegion
+				flowKey.SameZone = srcZone == dstZone
+			}
+
 			flowKey.PodName = dstPod.Name
 			flowKey.Namespace = dstPod.Namespace
 			currentFlow := opts.IngStatistics[flowKey]
@@ -133,4 +145,101 @@ func searchPod(ip string, entry payload.FlowEntry, podIpIndex map[uint32]metrics
 	pod, ok := podIpIndex[network.IpToUint32(parsedIP)]
 
 	return pod, ok
+}
+
+func classify(ip, region, zone string, flowKey *metrics.FlowKey, config Config) bool {
+	r, z, ok := classifyDirectClassification(ip, config.Destinations.DirectClassification)
+	if ok {
+		flowKey.SameRegion = r == region
+		flowKey.SameZone = z == zone
+		flowKey.Internet = false
+		return true
+	}
+
+	internet := classifyInternet(ip, config.Destinations.Internet)
+	if internet {
+		flowKey.Internet = true
+		flowKey.SameRegion = false
+		flowKey.SameZone = false
+		return true
+	}
+
+	inRegion := classifyInRegion(ip, config.Destinations.InRegion)
+	if inRegion {
+		flowKey.SameRegion = true
+		flowKey.Internet = false
+		return true
+	}
+
+	crossRegion := classifyCrossRegion(ip, config.Destinations.CrossRegion)
+	if crossRegion {
+		flowKey.SameRegion = false
+		flowKey.SameZone = false
+		flowKey.Internet = false
+		return true
+	}
+
+	return false
+}
+
+func classifyInRegion(ip string, inRegion []string) bool {
+	for _, addr := range inRegion {
+		_, mask, err := net.ParseCIDR(addr)
+		if err != nil {
+			slog.Warn("Invalid CIDR in in-region config", "cidr", addr, "error", err)
+			continue
+		}
+		if mask.Contains(net.ParseIP(ip)) {
+			return true
+		}
+	}
+
+	return false
+}
+
+func classifyDirectClassification(ip string, directClassifications []DirectClassification) (string, string, bool) {
+	for _, dc := range directClassifications {
+		for _, addr := range dc.IPs {
+			_, mask, err := net.ParseCIDR(addr)
+			if err != nil {
+				slog.Warn("Invalid CIDR in direct classification config", "cidr", addr, "error", err)
+				continue
+			}
+			if mask.Contains(net.ParseIP(ip)) {
+				return dc.Region, dc.Zone, true
+			}
+		}
+	}
+
+	return "", "", false
+}
+
+func classifyCrossRegion(ip string, crossRegion []string) bool {
+	for _, addr := range crossRegion {
+		_, mask, err := net.ParseCIDR(addr)
+		if err != nil {
+			slog.Warn("Invalid CIDR in cross-region config", "cidr", addr, "error", err)
+			continue
+		}
+		if mask.Contains(net.ParseIP(ip)) {
+			return true
+		}
+	}
+
+	return false
+}
+
+func classifyInternet(ip string, internet []string) bool {
+	for _, addr := range internet {
+		_, mask, err := net.ParseCIDR(addr)
+		if err != nil {
+			slog.Warn("Invalid CIDR in internet config", "cidr", addr, "error", err)
+			continue
+		}
+		if mask.Contains(net.ParseIP(ip)) {
+			return true
+		}
+	}
+
+	return false
 }

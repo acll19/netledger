@@ -2,3 +2,5 @@ agent/netledger_bpfeb.o
 agent/netledger_bpfel.o
 netledger-agent
 netledger-classifier
+
+.config

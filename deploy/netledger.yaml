@@ -138,6 +138,52 @@ spec:
     targetPort: 8080
     name: http
 ---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: netledger-classifier-config
+  namespace: netledger
+data:
+  config.yaml: |
+    # Inspired by Kubecost's network configuration: https://github.com/kubecost/kubecost/blob/9abce5707c04e4bdf4d2fb375ad87ed168fb89bc/kubecost/values.yaml#L805
+    destinations:
+      in-zone:
+        # Loopback Addresses in "IANA IPv4 Special-Purpose Address Registry"
+        - "127.0.0.0/8"
+        # IPv4 Link Local Address Space
+        - "169.254.0.0/16"
+        # Private Address Ranges in RFC-1918
+        # - "10.0.0.0/8"  # Remove this entry if using Multi-AZ Kubernetes
+        - "172.16.0.0/12"
+        - "192.168.0.0/16"
+
+      # In Region contains a list of address/range that will be
+      # classified as in region. This is synonymous with cross
+      # zone traffic, where the regions between source and destinations
+      # are the same, but the zone is different.
+      in-region: []
+
+      # Cross Region contains a list of address/range that will be
+      # classified as non-internet egress from one region to another.
+      cross-region: []
+
+      # Internet contains a list of address/range that will be
+      # classified as internet traffic. This is synonymous with traffic
+      # that cannot be classified within the cluster.
+      # NOTE: Internet classification filters are executed _after_
+      # NOTE: direct-classification, but before in-zone, in-region,
+      # NOTE: and cross-region.
+      internet: []
+
+      # Direct Classification specifically maps an ip address or range
+      # to a region (required) and/or zone (optional). This classification
+      # takes priority over in-zone, in-region, and cross-region configurations.
+      direct-classification: []
+      # - region: "us-east1"
+      #   zone: "us-east1-c"
+      #   ips:
+      #     - "10.0.0.0/24"
+---
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -167,3 +213,14 @@ spec:
         ports:
         - containerPort: 8080
           name: http
+        volumeMounts:
+        - name: config-volume
+          mountPath: .config/config.yaml
+          subPath: config.yaml
+      volumes:
+      - name: config-volume
+        configMap:
+          name: netledger-classifier-config
+          items:
+          - key: config.yaml
+            path: config.yaml

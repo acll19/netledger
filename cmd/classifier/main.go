@@ -9,6 +9,7 @@ import (
 	"os/signal"
 	"syscall"
 
+	"github.com/acll19/netledger/internal/classifier"
 	"github.com/acll19/netledger/internal/classifier/server"
 	k8s "github.com/acll19/netledger/internal/kubernetes"
 	"github.com/acll19/netledger/internal/log"
@@ -42,7 +43,9 @@ func main() {
 		slog.Error("Error parsing service CIDR", "error", err)
 		os.Exit(1)
 	}
-	server := server.NewServer(clientset, ipNet)
+
+	config := loadConfig()
+	server := server.NewServer(clientset, ipNet, config)
 
 	go server.WatchPods()
 	go server.WatchNodes()
@@ -55,4 +58,13 @@ func main() {
 func init() {
 	flag.StringVar(&serviceCidr, "serviceCidr", "", "Cluster service IP range")
 	flag.StringVar(&logLevel, "log-level", "info", "Log level (debug, info, warn, error)")
+}
+
+func loadConfig() classifier.Config {
+	config, err := classifier.LoadConfig(".config/config.yaml")
+	if err != nil {
+		slog.Error("Error loading config", "error", err)
+		os.Exit(1)
+	}
+	return config
 }

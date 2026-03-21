@@ -189,10 +189,10 @@ func Run(flushInterval time.Duration, node, server string, startupTime int64) er
 					continue
 				}
 
-				if values[i].ConnDirection == 0 { // egress
+				if values[i].ConnDirection == network.Egress {
 					srcPod = pod.Name
 					srcNs = pod.Namespace
-				} else { // ingress
+				} else {
 					dstPod = pod.Name
 					dstNs = pod.Namespace
 				}

@@ -43,9 +43,10 @@ type Server struct {
 	serviceIpNet    *net.IPNet
 	mutex           sync.RWMutex
 	agentsHeartBeat map[string]*registeredAgent // map to track registered agents by node name
+	config          classifier.Config
 }
 
-func NewServer(clientset *kubernetes.Clientset, serviceIpNet *net.IPNet) *Server {
+func NewServer(clientset *kubernetes.Clientset, serviceIpNet *net.IPNet, config classifier.Config) *Server {
 	server := &Server{
 		clientset:       clientset,
 		serviceIpNet:    serviceIpNet,
@@ -56,6 +57,7 @@ func NewServer(clientset *kubernetes.Clientset, serviceIpNet *net.IPNet) *Server
 		ingStatistics:   metrics.StatisticMap{},
 		egStatistics:    metrics.StatisticMap{},
 		agentsHeartBeat: map[string]*registeredAgent{},
+		config:          config,
 	}
 	return server
 }
@@ -326,6 +328,7 @@ func (s *Server) handlePayload(w http.ResponseWriter, r *http.Request) {
 		ServiceIpNet:  s.serviceIpNet,
 		IngStatistics: s.ingStatistics,
 		EgStatistics:  s.egStatistics,
+		Config:        s.config,
 	}
 
 	// Do not classify flows from agents that have recently restarted to protect against delta spikes in
@@ -357,7 +360,7 @@ func (s *Server) handlePayload(w http.ResponseWriter, r *http.Request) {
 	s.mutex.Unlock()
 
 	for _, fl := range flowLogs {
-		slog.Info( // TODO: change to DEBUG once logger logic is in place
+		slog.Debug(
 			"Classified flow",
 			"source",
 			fmt.Sprintf("%s(%s:%d)", fl.Src, fl.SrcIP, fl.SrcPort),
