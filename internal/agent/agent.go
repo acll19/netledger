@@ -28,19 +28,62 @@ import (
 	v1 "k8s.io/api/core/v1"
 )
 
-func Run(flushInterval time.Duration, node, server string, startupTime int64) error {
+type podEvent struct {
+	eventType string
+	pod       *v1.Pod
+}
+
+type Agent struct {
+	Node           string
+	Server         string
+	StartupTime    int64
+	Interval       time.Duration
+	podCgroupCache map[uint64]*v1.Pod
+	cgroupPodCache map[string][]uint64 // map of pod UID to slice of cgroup IDs for handling pod deletions
+	podChannel     chan podEvent
+	httpClient     *http.Client
+}
+
+func NewAgent(node, server string, startupTime int64, interval time.Duration) *Agent {
+	var httpClient = &http.Client{
+		Timeout: 2 * time.Second, // TODO: consider making this configurable
+		Transport: &http.Transport{
+			DisableKeepAlives: true,
+			DialContext: (&net.Dialer{
+				Timeout:   500 * time.Millisecond, // TODO: consider making this configurable
+				KeepAlive: 30 * time.Second,       // TODO: consider making this configurable
+			}).DialContext,
+			TLSHandshakeTimeout:   500 * time.Millisecond, // TODO: consider making this configurable
+			ResponseHeaderTimeout: 1 * time.Second,        // TODO: consider making this configurable
+			ExpectContinueTimeout: 200 * time.Millisecond, // TODO: consider making this configurable
+		},
+	}
+
+	return &Agent{
+		Node:           node,
+		Server:         server,
+		StartupTime:    startupTime,
+		Interval:       interval,
+		podCgroupCache: make(map[uint64]*v1.Pod),
+		cgroupPodCache: make(map[string][]uint64),
+		podChannel:     make(chan podEvent, 100), // TODO: consider making this buffer size configurable
+		httpClient:     httpClient,
+	}
+}
+
+func (a *Agent) LoadEBPF() (*bpf.NetLedgerObjects, []link.Link, error) {
 	// Remove resource limits for kernels <5.11.
 	if err := rlimit.RemoveMemlock(); err != nil {
-		return fmt.Errorf("removing memlock: %w", err)
+		return nil, nil, fmt.Errorf("removing memlock: %w", err)
 	}
 
 	spec, err := bpf.LoadNetLedger()
 	if err != nil {
-		return fmt.Errorf("loading netledger: %w", err)
+		return nil, nil, fmt.Errorf("loading netledger: %w", err)
 	}
 
 	if err := os.MkdirAll("/sys/fs/bpf/netledger", 0755); err != nil {
-		return fmt.Errorf("error creating directory for pinning eBPF maps: %w", err)
+		return nil, nil, fmt.Errorf("error creating directory for pinning eBPF maps: %w", err)
 	}
 	var objs bpf.NetLedgerObjects
 	opts := &ebpf.CollectionOptions{
@@ -49,64 +92,56 @@ func Run(flushInterval time.Duration, node, server string, startupTime int64) er
 		},
 	}
 	if err := spec.LoadAndAssign(&objs, opts); err != nil {
-		return fmt.Errorf("load eBPF objects: %w", err)
+		return nil, nil, fmt.Errorf("load eBPF objects: %w", err)
 	}
-	defer objs.Close()
 
 	activeLinks := make([]link.Link, 0)
 	cgroupEgressLink, err := bpf.AttachRootCgroup(objs.CgEgress, ebpf.AttachCGroupInetEgress)
 	if err != nil {
-		return fmt.Errorf("attach cgroup skb: %w", err)
+		return nil, nil, fmt.Errorf("attach cgroup skb: %w", err)
 	}
 	activeLinks = append(activeLinks, cgroupEgressLink)
 
 	cgroupIngressLink, err := bpf.AttachRootCgroup(objs.CgIngress, ebpf.AttachCGroupInetIngress)
 	if err != nil {
-		return fmt.Errorf("attach cgroup skb: %w", err)
+		return nil, nil, fmt.Errorf("attach cgroup skb: %w", err)
 	}
 	activeLinks = append(activeLinks, cgroupIngressLink)
 
 	cgroupConnectLink, err := bpf.AttachRootCgroup(objs.CgConnect4, ebpf.AttachCGroupInet4Connect)
 	if err != nil {
-		return fmt.Errorf("attach cgroup skb: %w", err)
+		return nil, nil, fmt.Errorf("attach cgroup skb: %w", err)
 	}
 	activeLinks = append(activeLinks, cgroupConnectLink)
 
 	cgroupBindLink, err := bpf.AttachRootCgroup(objs.CgBind4, ebpf.AttachCGroupInet4Bind)
 	if err != nil {
-		return fmt.Errorf("attach cgroup skb: %w", err)
+		return nil, nil, fmt.Errorf("attach cgroup skb: %w", err)
 	}
 	activeLinks = append(activeLinks, cgroupBindLink)
 
 	cgroupSockopsLink, err := bpf.AttachRootCgroup(objs.TcpSockops, ebpf.AttachCGroupSockOps)
 	if err != nil {
-		return fmt.Errorf("attach cgroup skb: %w", err)
+		return nil, nil, fmt.Errorf("attach cgroup skb: %w", err)
 	}
 	activeLinks = append(activeLinks, cgroupSockopsLink)
 	slog.Info("Number of active links", "count", len(activeLinks))
 
-	defer func() {
-		for _, link := range activeLinks {
-			if err := link.Close(); err != nil {
-				slog.Error("error closing link object", "message", err.Error())
-			}
-		}
-	}()
+	return &objs, activeLinks, nil
+}
 
+func (a *Agent) Start(objs *bpf.NetLedgerObjects) error {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	go kubernetes.WatchPods(onPodAdd, onPodDelete, onPodUpdate)
-
-	podCgroupCache := make(map[uint64]*v1.Pod)
-	cgroupPodCache := make(map[string][]uint64) // map of pod UID to slice of cgroup IDs for handling pod deletions
-	go processPodEvents(ctx, podChannel, podCgroupCache, cgroupPodCache)
+	go kubernetes.WatchPods(a.onPodAdd, a.onPodDelete, a.onPodUpdate)
+	go a.processPodEvents(ctx)
 
 	// Channel to listen to interrupt signals
 	stop := make(chan os.Signal, 1)
 	signal.Notify(stop, syscall.SIGINT, syscall.SIGTERM)
 
-	ticker := time.NewTicker(flushInterval)
+	ticker := time.NewTicker(a.Interval)
 	defer ticker.Stop()
 
 	size := objs.ConnMap.MaxEntries()
@@ -182,7 +217,7 @@ func Run(flushInterval time.Duration, node, server string, startupTime int64) er
 				dstIp := network.Uint32ToIP(values[i].DstIp)
 
 				var srcPod, srcNs, dstPod, dstNs string
-				pod := podCgroupCache[values[i].CgroupId]
+				pod := a.podCgroupCache[values[i].CgroupId]
 				if pod == nil {
 					// If the cgroup ID is not in the cache, it means we haven't seen a pod with that cgroup ID yet (or the pod has been deleted)
 					slog.Debug(fmt.Sprintf("cgroup ID %d not found in cache", values[i].CgroupId))
@@ -235,45 +270,31 @@ func Run(flushInterval time.Duration, node, server string, startupTime int64) er
 				go func() {
 					slog.Debug(fmt.Sprintf("Sending %d entries to API server", len(entries)))
 					serverCtx := context.WithoutCancel(context.Background())
-					err := sendDataToServer(serverCtx, server, node, entries, startupTime)
+					err := a.sendDataToServer(serverCtx, entries, a.StartupTime)
 					if err != nil {
 						slog.Error(err.Error())
 					}
 				}()
 			}
 
-			removeClosedConnections(lastSeen, keys, values, objs.ConnMap)
+			a.removeClosedConnections(lastSeen, keys, values, objs.ConnMap)
 		}
 	}
 }
 
-var httpClient = &http.Client{
-	Timeout: 2 * time.Second,
-	Transport: &http.Transport{
-		DisableKeepAlives: true,
-		DialContext: (&net.Dialer{
-			Timeout:   500 * time.Millisecond,
-			KeepAlive: 30 * time.Second,
-		}).DialContext,
-		TLSHandshakeTimeout:   500 * time.Millisecond,
-		ResponseHeaderTimeout: 1 * time.Second,
-		ExpectContinueTimeout: 200 * time.Millisecond,
-	},
-}
-
-func sendDataToServer(ctx context.Context, server, node string, flowEntries []payload.FlowEntry, startupTime int64) error {
+func (a *Agent) sendDataToServer(ctx context.Context, flowEntries []payload.FlowEntry, startupTime int64) error {
 	content := payload.Encode(payload.Flow{
-		AgentNode:   node,
+		AgentNode:   a.Node,
 		StartupTime: startupTime,
 		Entries:     flowEntries,
 	})
-	req, err := http.NewRequest("POST", server, bytes.NewReader(content))
+	req, err := http.NewRequest("POST", a.Server, bytes.NewReader(content))
 	if err != nil {
 		return fmt.Errorf("new request: %w", err)
 	}
 
 	req = req.WithContext(ctx)
-	res, err := httpClient.Do(req)
+	res, err := a.httpClient.Do(req)
 	if err != nil {
 		return fmt.Errorf("do request: %w", err)
 	}
@@ -291,7 +312,7 @@ func sendDataToServer(ctx context.Context, server, node string, flowEntries []pa
 	return nil
 }
 
-func removeClosedConnections(
+func (a *Agent) removeClosedConnections(
 	lastSeen map[uint64]bpf.NetLedgerConnVal,
 	currentConnsKeys []uint64,
 	currentConnsValues []bpf.NetLedgerConnVal,
@@ -307,62 +328,49 @@ func removeClosedConnections(
 	}
 }
 
-// =====================================
-// =====================================
-type podEvent struct {
-	eventType string
-	pod       *v1.Pod
+func (a *Agent) onPodAdd(obj any) {
+	a.podChannel <- podEvent{eventType: "add", pod: obj.(*v1.Pod)}
 }
 
-var podChannel = make(chan podEvent, 100)
-
-func onPodAdd(obj any) {
-	podChannel <- podEvent{eventType: "add", pod: obj.(*v1.Pod)}
+func (a *Agent) onPodDelete(obj any) {
+	a.podChannel <- podEvent{eventType: "delete", pod: obj.(*v1.Pod)}
 }
 
-func onPodDelete(obj any) {
-	slog.Debug("Pod deleted", "namespace", obj.(*v1.Pod).Namespace, "pod", obj.(*v1.Pod).Name)
-}
-
-func onPodUpdate(oldObj, newObj any) {
+func (a *Agent) onPodUpdate(oldObj, newObj any) {
 	newPod := newObj.(*v1.Pod)
-	podChannel <- podEvent{eventType: "update", pod: newPod}
+	a.podChannel <- podEvent{eventType: "update", pod: newPod}
 }
 
-func processPodEvents(
-	ctx context.Context, podChan <-chan podEvent,
-	podCgroupCache map[uint64]*v1.Pod,
-	cgroupPodCache map[string][]uint64) {
-
+func (a *Agent) processPodEvents(ctx context.Context) {
 	m := sync.RWMutex{}
 	for {
 		select {
 		case <-ctx.Done():
 			slog.Info("Stopping pod event processor")
 			return
-		case evt := <-podChan:
+		case evt := <-a.podChannel:
 			m.Lock()
 			switch evt.eventType {
 			case "add":
 				slog.Debug("Pod added", "namespace", evt.pod.Namespace, "pod", evt.pod.Name)
-				err := cgroup.CacheCgroupIDToPod(evt.pod, podCgroupCache, cgroupPodCache)
+				err := cgroup.CacheCgroupIDToPod(evt.pod, a.podCgroupCache, a.cgroupPodCache)
 				if err != nil {
 					slog.Error("Error caching cgroup ID to pod", "error", err.Error())
 				}
 			case "update":
 				slog.Debug("Pod updated", "namespace", evt.pod.Namespace, "pod", evt.pod.Name)
-				err := cgroup.CacheCgroupIDToPod(evt.pod, podCgroupCache, cgroupPodCache)
+				err := cgroup.CacheCgroupIDToPod(evt.pod, a.podCgroupCache, a.cgroupPodCache)
 				if err != nil {
 					slog.Error("Error caching cgroup ID to pod", "error", err.Error())
 				}
 			case "delete":
 				slog.Debug("Pod deleted", "namespace", evt.pod.Namespace, "pod", evt.pod.Name)
 				uid := string(evt.pod.UID)
-				if cgroupIDs, exists := cgroupPodCache[uid]; exists {
+				if cgroupIDs, exists := a.cgroupPodCache[uid]; exists {
 					for _, cgroupID := range cgroupIDs {
-						delete(podCgroupCache, cgroupID)
+						delete(a.podCgroupCache, cgroupID)
 					}
-					delete(cgroupPodCache, uid)
+					delete(a.cgroupPodCache, uid)
 				}
 			default:
 				slog.Error("Unknown event type", "eventType", evt.eventType, "namespace", evt.pod.Namespace, "pod", evt.pod.Name)

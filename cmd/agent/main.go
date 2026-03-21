@@ -2,6 +2,8 @@ package main
 
 import (
 	"flag"
+	"log/slog"
+	"os"
 	"time"
 
 	"github.com/acll19/netledger/internal/agent"
@@ -20,9 +22,26 @@ func main() {
 
 	fi := 1 * time.Second
 	startupTime := time.Now().Unix()
-	err := agent.Run(fi, node, server, startupTime)
+	agent := agent.NewAgent(node, server, startupTime, fi)
+	objs, links, err := agent.LoadEBPF()
 	if err != nil {
-		panic(err)
+		slog.Error("Error loading eBPF programs", "error", err)
+		os.Exit(1)
+	}
+
+	defer func() {
+		objs.Close()
+		for _, link := range links {
+			if err := link.Close(); err != nil {
+				slog.Error("error closing link object", "message", err.Error())
+			}
+		}
+	}()
+
+	err = agent.Start(objs)
+	if err != nil {
+		slog.Error("Error starting agent", "error", err)
+		os.Exit(1)
 	}
 }
 

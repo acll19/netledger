@@ -24,6 +24,7 @@ var (
 func main() {
 	flag.Parse()
 	log.SetupLogger(logLevel)
+	slog.Debug("log level flag", "level", logLevel)
 
 	clientset, err := k8s.GetKubernetesClient()
 	if err != nil {
