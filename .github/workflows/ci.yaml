@@ -41,11 +41,11 @@ jobs:
       
       - name: Build Agent
         run: |
-          VERSION=$AGENT_VERSION HASH=$HASH REPO=$REPO make build-agent
+          VERSION=${{ env.AGENT_VERSION }} HASH=${{ env.HASH }} REPO=${{ env.REPO }} make build-agent
       
       - name: Build Classifier
         run: |
-          VERSION=$CLASSIFIER_VERSION HASH=$HASH REPO=$REPO make build-classifier
+          VERSION=${{ env.CLASSIFIER_VERSION }} HASH=${{ env.HASH }} REPO=${{ env.REPO }} make build-classifier
       
       - name: Push to GitHub Container Registry
         uses: docker/build-push-action@v3
@@ -53,7 +53,7 @@ jobs:
           context: .
           push: true
           tags: |
-            ${REPO}/netledger-agent:${AGENT_VERSION}
-            ${REPO}/netledger-agent:${HASH}
-            ${REPO}/netledger-classifier:${CLASSIFIER_VERSION}
-            ${REPO}/netledger-classifier:${HASH}
+            ${{ env.REPO }}/netledger-agent:${{ env.AGENT_VERSION }}
+            ${{ env.REPO }}/netledger-agent:${{ env.HASH }}
+            ${{ env.REPO }}/netledger-classifier:${{ env.CLASSIFIER_VERSION }}
+            ${{ env.REPO }}/netledger-classifier:${{ env.HASH }}
