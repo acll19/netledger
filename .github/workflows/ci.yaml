@@ -47,13 +47,16 @@ jobs:
         run: |
           VERSION=${{ env.CLASSIFIER_VERSION }} HASH=${{ env.HASH }} REPO=${{ env.REPO }} make build-classifier
       
-      - name: Push to GitHub Container Registry
-        uses: docker/build-push-action@v3
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v2
         with:
-          context: .
-          push: true
-          tags: |
-            ${{ env.REPO }}/netledger-agent:${{ env.AGENT_VERSION }}
-            ${{ env.REPO }}/netledger-agent:${{ env.HASH }}
-            ${{ env.REPO }}/netledger-classifier:${{ env.CLASSIFIER_VERSION }}
-            ${{ env.REPO }}/netledger-classifier:${{ env.HASH }}
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Push images to GitHub Container Registry
+        run: |
+          docker push ${{ env.REPO }}/netledger-agent:${{ env.AGENT_VERSION }}
+          docker push ${{ env.REPO }}/netledger-agent:${{ env.HASH }}
+          docker push ${{ env.REPO }}/netledger-classifier:${{ env.CLASSIFIER_VERSION }}
+          docker push ${{ env.REPO }}/netledger-classifier:${{ env.HASH }}
