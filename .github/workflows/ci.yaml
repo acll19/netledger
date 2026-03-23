@@ -37,16 +37,15 @@ jobs:
           echo "AGENT_VERSION=$(cat versions.json | jq -r '.agent')" >> $GITHUB_ENV
           echo "CLASSIFIER_VERSION=$(cat versions.json | jq -r '.classifier')" >> $GITHUB_ENV
           echo "HASH=$(git rev-parse --short HEAD)" >> $GITHUB_ENV
+          echo "REPO=ghcr.io/acll19/netledger" >> $GITHUB_ENV
       
       - name: Build Agent
         run: |
-          hash=$(git rev-parse --short HEAD)
-          VERSION=$AGENT_VERSION HASH=$HASH make build-agent
+          VERSION=$AGENT_VERSION HASH=$HASH REPO=$REPO make build-agent
       
       - name: Build Classifier
         run: |
-          hash=$(git rev-parse --short HEAD)
-          VERSION=$CLASSIFIER_VERSION HASH=$HASH make build-classifier
+          VERSION=$CLASSIFIER_VERSION HASH=$HASH REPO=$REPO make build-classifier
       
       - name: Push to GitHub Container Registry
         uses: docker/build-push-action@v3
@@ -54,7 +53,7 @@ jobs:
           context: .
           push: true
           tags: |
-            ghcr.io/acll19/netledger/netledger-agent:${AGENT_VERSION}
-            ghcr.io/acll19/netledger/netledger-agent:${HASH}
-            ghcr.io/acll19/netledger/netledger-classifier:${CLASSIFIER_VERSION}
-            ghcr.io/acll19/netledger/netledger-classifier:${HASH}
+            ${REPO}/netledger-agent:${AGENT_VERSION}
+            ${REPO}/netledger-agent:${HASH}
+            ${REPO}/netledger-classifier:${CLASSIFIER_VERSION}
+            ${REPO}/netledger-classifier:${HASH}
