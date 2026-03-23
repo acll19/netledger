@@ -1,12 +1,12 @@
 build-agent:
 	go generate ./...
 	./build.sh netledger-agent ./cmd/agent/main.go
-	docker build --platform=linux/amd64 -f Dockerfile.agent -t netledger-agent:${VERSION} .
+	docker build --platform=linux/amd64 -f Dockerfile.agent -t ${REPO}/netledger-agent:${VERSION} .
 	docker tag ${REPO}/netledger-agent:${VERSION} ${REPO}/netledger-agent:${HASH}
 
 build-classifier:
 	./build.sh netledger-classifier ./cmd/classifier/main.go
-	docker build --platform=linux/amd64 -f Dockerfile.classifier -t netledger-classifer:${VERSION} .
+	docker build --platform=linux/amd64 -f Dockerfile.classifier -t ${REPO}/netledger-classifer:${VERSION} .
 	docker tag ${REPO}/netledger-classifer:${VERSION} ${REPO}/netledger-classifer:${HASH}
 
 test:
