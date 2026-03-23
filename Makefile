@@ -6,8 +6,8 @@ build-agent:
 
 build-classifier:
 	./build.sh netledger-classifier ./cmd/classifier/main.go
-	docker build --platform=linux/amd64 -f Dockerfile.classifier -t ${REPO}/netledger-classifer:${VERSION} .
-	docker tag ${REPO}/netledger-classifer:${VERSION} ${REPO}/netledger-classifer:${HASH}
+	docker build --platform=linux/amd64 -f Dockerfile.classifier -t ${REPO}/netledger-classifier:${VERSION} .
+	docker tag ${REPO}/netledger-classifier:${VERSION} ${REPO}/netledger-classifier:${HASH}
 
 test:
 	go test ./cmd/... -v
