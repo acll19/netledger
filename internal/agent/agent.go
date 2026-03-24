@@ -165,7 +165,11 @@ func (a *Agent) Start(objs *bpf.NetLedgerObjects) error {
 			opts := &ebpf.BatchOptions{}
 			cursor := new(ebpf.MapBatchCursor)
 			n, err := objs.ConnMap.BatchLookup(cursor, keys, values, opts)
-			slog.Debug("batch lookup result", "received entries", strconv.Itoa(n), "err", err.Error(), "mapSize", strconv.FormatUint(uint64(objs.ConnMap.MaxEntries()), 10))
+			var errMsg string
+			if err != nil && !errors.Is(err, ebpf.ErrKeyNotExist) {
+				errMsg = err.Error()
+			}
+			slog.Debug("batch lookup result", "received entries", strconv.Itoa(n), "err", errMsg, "mapSize", strconv.FormatUint(uint64(objs.ConnMap.MaxEntries()), 10))
 			if n <= 0 {
 				slog.Debug("no data, skipping")
 				continue

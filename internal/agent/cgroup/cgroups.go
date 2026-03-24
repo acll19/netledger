@@ -18,6 +18,7 @@ import (
 // cgroup IDs, and stores the cgroup ID to pod mapping.
 //
 // Example cgroup paths to parse for container ID and pod UID:
+// kubepods.slice/kubepods-burstable.slice/kubepods-burstable-pod<UID>.slice/cri-containerd-<containerID>.scope (AKS with Cilium)
 // kubelet-kubepods-besteffort.slice/kubelet-kubepods-besteffort-pod<UID>.slice/cri-containerd-<containerID>.scope
 // kubelet-kubepods-burstable.slice/kubelet-kubepods-burstable-pod<UID>.slice/cri-containerd-<containerID>.scope
 // kubelet-kubepods-burstable.slice/kubelet-kubepods-burstable-pod<UID>.slice/docker-<containerID>.scope (KinD with docker)
@@ -74,18 +75,25 @@ func findContainerCgroupID(containerID string, podUID string) (uint64, error) {
 
 	var lastErr error
 
-	// Search in kubelet.slice first (most common)
+	// Search in kubepods.slice first (AKS with Cilium)
+	if cgroupID, err := searchCgroupForContainer(filepath.Join(cgroupRoot, "kubepods.slice"), containerID, podUID); err == nil {
+		return cgroupID, nil
+	} else {
+		lastErr = fmt.Errorf("kubepods.slice: %w", err)
+	}
+
+	// Try kubelet.slice (standard Kubernetes)
 	if cgroupID, err := searchCgroupForContainer(filepath.Join(cgroupRoot, "kubelet.slice"), containerID, podUID); err == nil {
 		return cgroupID, nil
 	} else {
-		lastErr = fmt.Errorf("kubelet.slice: %w", err)
+		lastErr = errors.Join(lastErr, fmt.Errorf("kubelet.slice: %w", err))
 	}
 
 	// Try system.slice for KinD with docker
 	if cgroupID, err := searchCgroupForContainer(filepath.Join(cgroupRoot, "system.slice"), containerID, podUID); err == nil {
 		return cgroupID, nil
 	} else {
-		lastErr = fmt.Errorf("system.slice: %w", err)
+		lastErr = errors.Join(lastErr, fmt.Errorf("system.slice: %w", err))
 	}
 
 	return 0, fmt.Errorf("cgroup not found for container %s: %w", containerID, lastErr)
