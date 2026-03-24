@@ -73,7 +73,7 @@ func Classify(data payload.Flow, opts ClassifyOptions) []FlowLog {
 		flowKey := metrics.FlowKey{}
 		switch entry.Direction {
 		case network.Egress:
-			classified := classify(dstIp, srcRegion, srcZone, &flowKey, opts.Config)
+			classified := doClassify(dstIp, srcRegion, srcZone, &flowKey, opts.Config)
 			if !classified {
 				isInternet := network.IsInternetIP(dstParsed)
 				flowKey.Internet = isInternet
@@ -94,7 +94,7 @@ func Classify(data payload.Flow, opts ClassifyOptions) []FlowLog {
 				Traffic: entry.RxBytes + currentFlow.Traffic,
 			}
 		case network.Ingress:
-			classified := classify(srcIp, dstRegion, dstZone, &flowKey, opts.Config)
+			classified := doClassify(srcIp, dstRegion, dstZone, &flowKey, opts.Config)
 			if !classified {
 				isInternet := network.IsInternetIP(srcParsed)
 				flowKey.Internet = isInternet
@@ -147,7 +147,7 @@ func searchPod(ip string, entry payload.FlowEntry, podIpIndex map[uint32]metrics
 	return pod, ok
 }
 
-func classify(ip, region, zone string, flowKey *metrics.FlowKey, config Config) bool {
+func doClassify(ip, region, zone string, flowKey *metrics.FlowKey, config Config) bool {
 	r, z, ok := classifyDirectClassification(ip, config.Destinations.DirectClassification)
 	if ok {
 		flowKey.SameRegion = r == region
@@ -164,9 +164,18 @@ func classify(ip, region, zone string, flowKey *metrics.FlowKey, config Config) 
 		return true
 	}
 
+	inZone := classifyInZone(ip, config.Destinations.InZone)
+	if inZone {
+		flowKey.SameZone = true
+		flowKey.SameRegion = true
+		flowKey.Internet = false
+		return true
+	}
+
 	inRegion := classifyInRegion(ip, config.Destinations.InRegion)
 	if inRegion {
 		flowKey.SameRegion = true
+		flowKey.SameZone = false
 		flowKey.Internet = false
 		return true
 	}
@@ -177,6 +186,21 @@ func classify(ip, region, zone string, flowKey *metrics.FlowKey, config Config) 
 		flowKey.SameZone = false
 		flowKey.Internet = false
 		return true
+	}
+
+	return false
+}
+
+func classifyInZone(ip string, inZone []string) bool {
+	for _, addr := range inZone {
+		_, mask, err := net.ParseCIDR(addr)
+		if err != nil {
+			slog.Warn("Invalid CIDR in in-zone config", "cidr", addr, "error", err)
+			continue
+		}
+		if mask.Contains(net.ParseIP(ip)) {
+			return true
+		}
 	}
 
 	return false
