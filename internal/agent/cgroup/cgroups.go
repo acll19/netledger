@@ -11,8 +11,6 @@ import (
 	v1 "k8s.io/api/core/v1"
 )
 
-// TODO: also keep a map of pod UID to slice of cgroup IDs for handling pod deletions
-
 // CacheCgroupIDToPod populates the cgroupCache map with mappings from cgroup IDs to a pod.
 // It handles both regular pods by iterating through all containers (regular, init, and ephemeral), finds their
 // cgroup IDs, and stores the cgroup ID to pod mapping.
@@ -37,7 +35,6 @@ func CacheCgroupIDToPod(pod *v1.Pod, podCgroupCache map[uint64]*v1.Pod, cgroupPo
 
 	podUID := string(pod.UID)
 
-	// Collect all containers from all sources
 	var allContainers []v1.ContainerStatus
 	allContainers = append(allContainers, pod.Status.ContainerStatuses...)
 	allContainers = append(allContainers, pod.Status.InitContainerStatuses...)
@@ -49,13 +46,8 @@ func CacheCgroupIDToPod(pod *v1.Pod, podCgroupCache map[uint64]*v1.Pod, cgroupPo
 			continue
 		}
 
-		// Extract the container ID from the full container ID string (remove runtime prefix)
-		containerID := container.ContainerID
-		if parts := strings.Split(containerID, "://"); len(parts) == 2 {
-			containerID = parts[1]
-		}
+		containerID := extractContainerId(container)
 
-		// Try to find this container's cgroup ID
 		cgroupID, err := findContainerCgroupID(containerID, podUID)
 		if err != nil {
 			allErr = errors.Join(allErr, fmt.Errorf("error finding cgroup ID for container %s in pod %s; %w", containerID, pod.Name, err))
@@ -69,20 +61,29 @@ func CacheCgroupIDToPod(pod *v1.Pod, podCgroupCache map[uint64]*v1.Pod, cgroupPo
 	return allErr
 }
 
+// extractContainerId extracts the container ID from the full container ID string (remove runtime prefix)
+func extractContainerId(container v1.ContainerStatus) string {
+	containerID := container.ContainerID
+	if parts := strings.Split(containerID, "://"); len(parts) == 2 {
+		containerID = parts[1]
+	}
+	return containerID
+}
+
 // findContainerCgroupID finds the cgroup ID for a container by searching the cgroup filesystem.
 func findContainerCgroupID(containerID string, podUID string) (uint64, error) {
 	cgroupRoot := "/sys/fs/cgroup"
 
 	var lastErr error
 
-	// Search in kubepods.slice first (AKS with Cilium)
+	// Search in kubepods.slice first
 	if cgroupID, err := searchCgroupForContainer(filepath.Join(cgroupRoot, "kubepods.slice"), containerID, podUID); err == nil {
 		return cgroupID, nil
 	} else {
 		lastErr = fmt.Errorf("kubepods.slice: %w", err)
 	}
 
-	// Try kubelet.slice (standard Kubernetes)
+	// Try kubelet.slice
 	if cgroupID, err := searchCgroupForContainer(filepath.Join(cgroupRoot, "kubelet.slice"), containerID, podUID); err == nil {
 		return cgroupID, nil
 	} else {
@@ -102,12 +103,46 @@ func findContainerCgroupID(containerID string, podUID string) (uint64, error) {
 // searchCgroupForContainer searches the cgroup filesystem starting from basePath for a container,
 // returning its cgroup ID (inode) if found.
 func searchCgroupForContainer(basePath string, containerID string, podUID string) (uint64, error) {
-	// Check if the base path exists
 	if _, err := os.Stat(basePath); err != nil {
 		return 0, err
 	}
 
+	// Normalize pod UID to use underscores (cgroup format) instead of hyphens (k8s format)
+	normalizedPodUID := strings.ReplaceAll(podUID, "-", "_")
+
+	// Try common QoS class paths first (fast path)
+	for _, qosClass := range []string{"burstable", "besteffort", "guaranteed"} {
+		for _, containerRuntime := range []string{"cri-containerd", "docker", "cri-o"} {
+			// Common path patterns
+			paths := []string{
+				filepath.Join(basePath, fmt.Sprintf("kubepods-%s.slice", qosClass), fmt.Sprintf("kubepods-%s-pod%s.slice", qosClass, normalizedPodUID), fmt.Sprintf("%s-%s.scope", containerRuntime, containerID)),
+				filepath.Join(basePath, fmt.Sprintf("kubelet-kubepods-%s.slice", qosClass), fmt.Sprintf("kubelet-kubepods-%s-pod%s.slice", qosClass, normalizedPodUID), fmt.Sprintf("cri-containerd-%s.scope", containerID)),
+				filepath.Join(basePath, fmt.Sprintf("kubelet-kubepods-%s.slice", qosClass), fmt.Sprintf("kubelet-kubepods-%s-pod%s.slice", qosClass, normalizedPodUID), fmt.Sprintf("docker-%s.scope", containerID)),
+			}
+
+			for _, path := range paths {
+				if cgroupID, err := getCgroupIDFromPath(path); err == nil {
+					return cgroupID, nil
+				}
+			}
+		}
+	}
+
+	// Fall back to recursive search for edge cases
 	return searchCgroupForContainerRecursive(basePath, containerID, podUID)
+}
+
+// getCgroupIDFromPath returns the cgroup ID (inode) for a given path if it exists
+func getCgroupIDFromPath(path string) (uint64, error) {
+	stat, err := os.Stat(path)
+	if err != nil {
+		return 0, err
+	}
+
+	if sys, ok := stat.Sys().(*syscall.Stat_t); ok {
+		return sys.Ino, nil
+	}
+	return 0, fmt.Errorf("failed to get stat info")
 }
 
 // searchCgroupForContainerRecursive recursively searches for a container in the cgroup hierarchy.
