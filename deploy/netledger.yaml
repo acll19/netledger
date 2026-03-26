@@ -78,7 +78,7 @@ spec:
               fieldPath: spec.nodeName
         securityContext:
           privileged: true
-          readOnlyRootFilesystem: true
+          # readOnlyRootFilesystem: true
         volumeMounts:
         - name: bpffs
           mountPath: /sys/fs/bpf

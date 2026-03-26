@@ -42,9 +42,10 @@ type Agent struct {
 	cgroupPodCache map[string][]uint64 // map of pod UID to slice of cgroup IDs for handling pod deletions
 	podChannel     chan podEvent
 	httpClient     *http.Client
+	objs           *bpf.NetLedgerObjects
 }
 
-func NewAgent(node, server string, startupTime int64, interval time.Duration) *Agent {
+func NewAgent(objs *bpf.NetLedgerObjects, node, server string, startupTime int64, interval time.Duration) *Agent {
 	var httpClient = &http.Client{
 		Timeout: 2 * time.Second, // TODO: consider making this configurable
 		Transport: &http.Transport{
@@ -68,10 +69,11 @@ func NewAgent(node, server string, startupTime int64, interval time.Duration) *A
 		cgroupPodCache: make(map[string][]uint64),
 		podChannel:     make(chan podEvent, 100), // TODO: consider making this buffer size configurable
 		httpClient:     httpClient,
+		objs:           objs,
 	}
 }
 
-func (a *Agent) LoadEBPF() (*bpf.NetLedgerObjects, []link.Link, error) {
+func LoadEBPF() (*bpf.NetLedgerObjects, []link.Link, error) {
 	// Remove resource limits for kernels <5.11.
 	if err := rlimit.RemoveMemlock(); err != nil {
 		return nil, nil, fmt.Errorf("removing memlock: %w", err)
@@ -127,10 +129,52 @@ func (a *Agent) LoadEBPF() (*bpf.NetLedgerObjects, []link.Link, error) {
 	activeLinks = append(activeLinks, cgroupSockopsLink)
 	slog.Info("Number of active links", "count", len(activeLinks))
 
+	slog.Debug("AKII: before")
+	eth0Iface, err := bpf.GetHostEth0Iface()
+	if err != nil {
+		return nil, nil, fmt.Errorf("getting eth0 interface: %w", err)
+	}
+
+	// The IDEA is capture hostNetwork traffic at TC and correlate with cgroup data.
+	// The problem is that Cilium modifies the data path and traffic from such pods does not traverse through the nodes eth0 interface.
+	// How to solve that?
+	slog.Debug("AKII: got eth0 interface", "name", eth0Iface.Name, "index", eth0Iface.Index)
+	// li, err := bpf.AttachTcxToInterface(eth0Iface, objs.TcIngress, ebpf.AttachTCXIngress)
+	// if err != nil {
+	// 	slog.Error("attaching TCX to eth0 interface", "error", err)
+	// 	return nil, nil, fmt.Errorf("attaching TCX to eth0 interface: %w", err)
+	// }
+	// slog.Debug("AKII: attached TCX ingress", "link", fmt.Sprintf("%+v", li))
+	// activeLinks = append(activeLinks, li)
+
+	err = bpf.AttachClassicTC("eth0", objs.TcIngress.FD(), true)
+	if err != nil {
+		slog.Error("attaching classic TC to eth0 interface for ingress", "error", err)
+		return nil, nil, fmt.Errorf("attaching classic TC to eth0 interface for ingress: %w", err)
+	}
+
+	// le, err := bpf.AttachTcxToInterface(eth0Iface, objs.TcEgress, ebpf.AttachTCXEgress)
+	// if err != nil {
+	// 	slog.Error("attaching TCX to eth0 interface", "error", err)
+	// 	return nil, nil, fmt.Errorf("attaching TCX to eth0 interface: %w", err)
+	// }
+	// slog.Debug("AKII: attached TCX to eth0 interface for egress")
+	// activeLinks = append(activeLinks, le)
+
+	err = bpf.AttachClassicTC("eth0", objs.TcEgress.FD(), false)
+	if err != nil {
+		slog.Error("attaching classic TC to eth0 interface for egress", "error", err)
+		return nil, nil, fmt.Errorf("attaching classic TC to eth0 interface for egress: %w", err)
+	}
+
+	slog.Debug("AKII: sleeping 30s for inspection")
+	time.Sleep(30 * time.Second)
+	slog.Debug("AKII: done sleeping")
+
 	return &objs, activeLinks, nil
 }
 
-func (a *Agent) Start(objs *bpf.NetLedgerObjects) error {
+func (a *Agent) Start() error {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
@@ -144,7 +188,7 @@ func (a *Agent) Start(objs *bpf.NetLedgerObjects) error {
 	ticker := time.NewTicker(a.Interval)
 	defer ticker.Stop()
 
-	size := objs.ConnMap.MaxEntries()
+	size := a.objs.ConnMap.MaxEntries()
 	keys := make([]uint64, size)
 	values := make([]bpf.NetLedgerConnVal, size)
 	lastSeen := make(map[uint64]bpf.NetLedgerConnVal, size) // map[key]value for calculating deltas
@@ -164,12 +208,12 @@ func (a *Agent) Start(objs *bpf.NetLedgerObjects) error {
 			values = values[:size]
 			opts := &ebpf.BatchOptions{}
 			cursor := new(ebpf.MapBatchCursor)
-			n, err := objs.ConnMap.BatchLookup(cursor, keys, values, opts)
+			n, err := a.objs.ConnMap.BatchLookup(cursor, keys, values, opts)
 			var errMsg string
 			if err != nil && !errors.Is(err, ebpf.ErrKeyNotExist) {
 				errMsg = err.Error()
 			}
-			slog.Debug("batch lookup result", "received entries", strconv.Itoa(n), "err", errMsg, "mapSize", strconv.FormatUint(uint64(objs.ConnMap.MaxEntries()), 10))
+			slog.Debug("batch lookup result", "received entries", strconv.Itoa(n), "err", errMsg, "mapSize", strconv.FormatUint(uint64(a.objs.ConnMap.MaxEntries()), 10))
 			if n <= 0 {
 				slog.Debug("no data, skipping")
 				continue
@@ -181,7 +225,6 @@ func (a *Agent) Start(objs *bpf.NetLedgerObjects) error {
 			keys = keys[:n]
 			values = values[:n]
 
-			slog.Debug("debug printing", "keys", len(keys), "started with", n, "keys before filtering to host-local pods", len(keys))
 			entries := make([]payload.FlowEntry, 0, len(keys))
 
 			for i := range len(keys) {
@@ -281,7 +324,7 @@ func (a *Agent) Start(objs *bpf.NetLedgerObjects) error {
 				}()
 			}
 
-			a.removeClosedConnections(lastSeen, keys, values, objs.ConnMap)
+			a.removeClosedConnections(lastSeen, keys, values, a.objs.ConnMap)
 		}
 	}
 }
@@ -357,13 +400,19 @@ func (a *Agent) processPodEvents(ctx context.Context) {
 			switch evt.eventType {
 			case "add":
 				slog.Debug("Pod added", "namespace", evt.pod.Namespace, "pod", evt.pod.Name)
-				err := cgroup.CacheCgroupIDToPod(evt.pod, a.podCgroupCache, a.cgroupPodCache)
+				cg, err := cgroup.CacheCgroupIDToPod(evt.pod, a.podCgroupCache, a.cgroupPodCache)
 				if err != nil {
 					slog.Error("Error caching cgroup ID to pod", "error", err.Error())
+				} else if evt.pod.Spec.HostNetwork && cg != nil {
+					val := byte(1)
+					if err := a.objs.HostNetworkPodsMap.Put(*cg, val); err != nil {
+						slog.Error("Failed to insert into map", "error", err)
+					}
 				}
+
 			case "update":
 				slog.Debug("Pod updated", "namespace", evt.pod.Namespace, "pod", evt.pod.Name)
-				err := cgroup.CacheCgroupIDToPod(evt.pod, a.podCgroupCache, a.cgroupPodCache)
+				_, err := cgroup.CacheCgroupIDToPod(evt.pod, a.podCgroupCache, a.cgroupPodCache)
 				if err != nil {
 					slog.Error("Error caching cgroup ID to pod", "error", err.Error())
 				}
@@ -373,6 +422,9 @@ func (a *Agent) processPodEvents(ctx context.Context) {
 				if cgroupIDs, exists := a.cgroupPodCache[uid]; exists {
 					for _, cgroupID := range cgroupIDs {
 						delete(a.podCgroupCache, cgroupID)
+						if a.objs.HostNetworkPodsMap != nil && a.objs.HostNetworkPodsMap.FD() >= 0 {
+							a.objs.HostNetworkPodsMap.Delete(cgroupID)
+						}
 					}
 					delete(a.cgroupPodCache, uid)
 				}

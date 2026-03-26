@@ -73,6 +73,14 @@ struct
     __uint(pinning, LIBBPF_PIN_BY_NAME);
 } conn_map SEC(".maps");
 
+struct
+{
+    __uint(type, BPF_MAP_TYPE_HASH);
+    __uint(max_entries, 1024);
+    __type(key, __u64);  /* cgroup id */
+    __type(value, __u8); /* always 1 */
+} host_network_pods_map SEC(".maps");
+
 /* ============================================================
  * Helpers
  * ============================================================ */
@@ -361,6 +369,7 @@ int cg_ingress(struct __sk_buff *skb)
 SEC("cgroup_skb/egress")
 int cg_egress(struct __sk_buff *skb)
 {
+    bpf_trace_printk("cgroup_egress", sizeof("cgroup_egress"));
     __u64 cookie = bpf_get_socket_cookie(skb);
     struct conn_val *c = bpf_map_lookup_elem(&conn_map, &cookie);
     if (!c)
@@ -401,4 +410,127 @@ int cg_egress(struct __sk_buff *skb)
     __u32 s = skb->len + ETHERNET_HEADER_SIZE;
     __sync_fetch_and_add(&c->tx_bytes, s);
     return 1;
+}
+
+SEC("tc/ingress")
+int tc_ingress(struct __sk_buff *skb)
+{
+    bpf_trace_printk("tc_ingress", sizeof("tc_ingress"));
+    __u64 cookie = bpf_get_socket_cookie(skb);
+    struct conn_val *c = bpf_map_lookup_elem(&conn_map, &cookie);
+
+    if (c)
+    {
+        __u64 cgroup = c->cgroup_id;
+        __u8 *exist = bpf_map_lookup_elem(&host_network_pods_map, &cgroup);
+        if (exist)
+        {
+            bpf_trace_printk("tc_ingress IN", sizeof("tc_ingress IN"));
+            struct conn_val pkt = {};
+            __u8 is_syn = 0;
+
+            if (parse_ipv4_tuple(skb, &pkt, &is_syn) < 0)
+                return 1;
+
+            /* External TCP connection: first ingress SYN */
+            if (!c && pkt.proto == IPPROTO_TCP && is_syn)
+            {
+                pkt.cgroup_id = bpf_skb_cgroup_id(skb);
+                pkt.conn_direction = CONN_EXTERNAL_ORIGINATED;
+                pkt.have_src = 1;
+                pkt.have_dst = 1;
+
+                bpf_map_update_elem(&conn_map, &cookie, &pkt, BPF_ANY);
+                c = &pkt;
+            }
+
+            /* UDP: learn tuple on first ingress packet */
+            if (!c && pkt.proto == IPPROTO_UDP)
+            {
+                pkt.cgroup_id = bpf_skb_cgroup_id(skb);
+                pkt.conn_direction = CONN_EXTERNAL_ORIGINATED;
+                pkt.have_src = 1;
+                pkt.have_dst = 1;
+
+                bpf_map_update_elem(&conn_map, &cookie, &pkt, BPF_ANY);
+                c = &pkt;
+            }
+
+            if (!c)
+                return 1;
+
+            /* Learn destination for pod-originated connections */
+            if (!c->have_dst)
+            {
+                c->dst_ip = pkt.dst_ip;
+                c->dst_port = pkt.dst_port;
+                c->have_dst = 1;
+            }
+
+            /* Learn source for pod-originated connections */
+            if (!c->have_src && c->conn_direction == CONN_POD_ORIGINATED)
+            {
+                c->src_ip = pkt.src_ip;
+                c->src_port = pkt.src_port;
+                c->have_src = 1;
+            }
+
+            __u32 s = skb->len;
+            __sync_fetch_and_add(&c->rx_bytes, s);
+        }
+    }
+    return TC_ACT_OK;
+}
+
+SEC("tc/egress")
+int tc_egress(struct __sk_buff *skb)
+{
+    __u64 cookie = bpf_get_socket_cookie(skb);
+    struct conn_val *c = bpf_map_lookup_elem(&conn_map, &cookie);
+
+    if (c)
+    {
+        bpf_trace_printk("tc_ingress", sizeof("tc_ingress"));
+        __u64 cgroup = c->cgroup_id;
+        __u8 *exist = bpf_map_lookup_elem(&host_network_pods_map, &cgroup);
+        if (exist)
+        {
+            bpf_trace_printk("tc_egress IN", sizeof("tc_egress IN"));
+            struct conn_val pkt = {};
+            __u8 is_syn = 0;
+
+            if (parse_ipv4_tuple(skb, &pkt, &is_syn) < 0)
+                return 1;
+
+            /* Learn destination for pod-originated TCP/UDP */
+            if (!c->have_dst)
+            {
+                c->dst_ip = pkt.dst_ip;
+                c->dst_port = pkt.dst_port;
+                c->proto = pkt.proto;
+                c->have_dst = 1;
+            }
+
+            /* UDP pod-originated without connect/bind */
+            if (pkt.proto == IPPROTO_UDP && !c->have_src)
+            {
+                c->src_ip = pkt.src_ip;
+                c->src_port = pkt.src_port;
+                c->proto = pkt.proto;
+                c->have_src = 1;
+            }
+
+            /* Learn source for pod-originated connections */
+            if (!c->have_src && c->conn_direction == CONN_POD_ORIGINATED)
+            {
+                c->src_ip = pkt.src_ip;
+                c->src_port = pkt.src_port;
+                c->have_src = 1;
+            }
+
+            __u32 s = skb->len;
+            __sync_fetch_and_add(&c->tx_bytes, s);
+        }
+    }
+    return TC_ACT_OK;
 }

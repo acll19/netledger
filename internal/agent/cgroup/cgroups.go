@@ -20,17 +20,17 @@ import (
 // kubelet-kubepods-besteffort.slice/kubelet-kubepods-besteffort-pod<UID>.slice/cri-containerd-<containerID>.scope
 // kubelet-kubepods-burstable.slice/kubelet-kubepods-burstable-pod<UID>.slice/cri-containerd-<containerID>.scope
 // kubelet-kubepods-burstable.slice/kubelet-kubepods-burstable-pod<UID>.slice/docker-<containerID>.scope (KinD with docker)
-func CacheCgroupIDToPod(pod *v1.Pod, podCgroupCache map[uint64]*v1.Pod, cgroupPodCache map[string][]uint64) error {
+func CacheCgroupIDToPod(pod *v1.Pod, podCgroupCache map[uint64]*v1.Pod, cgroupPodCache map[string][]uint64) (*uint64, error) {
 	if pod == nil {
-		return fmt.Errorf("pod is nil")
+		return nil, fmt.Errorf("pod is nil")
 	}
 
 	if podCgroupCache == nil {
-		return fmt.Errorf("cgroup cache is nil")
+		return nil, fmt.Errorf("cgroup cache is nil")
 	}
 
 	if cgroupPodCache == nil {
-		return fmt.Errorf("cgroupPodCache is nil")
+		return nil, fmt.Errorf("cgroupPodCache is nil")
 	}
 
 	podUID := string(pod.UID)
@@ -56,9 +56,10 @@ func CacheCgroupIDToPod(pod *v1.Pod, podCgroupCache map[uint64]*v1.Pod, cgroupPo
 
 		podCgroupCache[cgroupID] = pod
 		cgroupPodCache[podUID] = append(cgroupPodCache[podUID], cgroupID)
+		return &cgroupID, nil
 	}
 
-	return allErr
+	return nil, allErr
 }
 
 // extractContainerId extracts the container ID from the full container ID string (remove runtime prefix)

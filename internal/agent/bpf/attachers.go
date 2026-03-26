@@ -2,9 +2,7 @@ package bpf
 
 import (
 	"fmt"
-	"log/slog"
 	"net"
-	"strings"
 
 	"github.com/cilium/ebpf"
 	"github.com/cilium/ebpf/link"
@@ -24,22 +22,15 @@ func AttachRootCgroup(prg *ebpf.Program, attachType ebpf.AttachType) (link.Link,
 	return cgroupIngressLink, err
 }
 
-func AttachTcxToInterfaces(ifaces []net.Interface, prg *ebpf.Program, attachType ebpf.AttachType) ([]link.Link, map[int]net.Interface, error) {
-	ifacesMap := make(map[int]net.Interface)
-	activeLinks := make([]link.Link, 0)
-	for _, iface := range ifaces {
-		l, err := attachTcxToInterface(iface, prg, attachType)
-		if err != nil {
-			return nil, nil, err
-		}
-		activeLinks = append(activeLinks, l)
-		ifacesMap[iface.Index] = iface
+func GetHostEth0Iface() (net.Interface, error) {
+	iface, err := net.InterfaceByName("eth0")
+	if err != nil {
+		return net.Interface{}, fmt.Errorf("getting eth0 interface: %w", err)
 	}
-
-	return activeLinks, ifacesMap, nil
+	return *iface, nil
 }
 
-func attachTcxToInterface(iface net.Interface, prg *ebpf.Program, attachType ebpf.AttachType) (link.Link, error) {
+func AttachTcxToInterface(iface net.Interface, prg *ebpf.Program, attachType ebpf.AttachType) (link.Link, error) {
 	l, err := link.AttachTCX(link.TCXOptions{
 		Interface: iface.Index,
 		Program:   prg,
@@ -52,51 +43,43 @@ func attachTcxToInterface(iface net.Interface, prg *ebpf.Program, attachType ebp
 	return l, nil
 }
 
-func ManageTCXLinks(ifacesMap map[int]net.Interface, activeLinks []link.Link, prg *ebpf.Program, attachType ebpf.AttachType) (chan struct{}, error) {
-	ch := make(chan netlink.LinkUpdate)
-	done := make(chan struct{})
-
-	if err := netlink.LinkSubscribe(ch, done); err != nil {
-		return nil, fmt.Errorf("error subscribing to link changes: %w", err)
+func AttachClassicTC(ifaceName string, progFd int, ingress bool) error {
+	link, err := netlink.LinkByName(ifaceName)
+	if err != nil {
+		return err
 	}
 
-	go func() {
-		for update := range ch {
-			switch update.Header.Type {
-			case unix.RTM_DELLINK:
-				ifIndex := update.Attrs().Index
-				delete(ifacesMap, ifIndex)
-				for _, l := range activeLinks {
-					i, err := l.Info()
-					if err != nil {
-						slog.Error("error getting link info", "message: ", err.Error())
-						continue
-					}
-					if i.Type == link.TCXType && i.TCX().Ifindex == uint32(ifIndex) {
-						if err := l.Close(); err != nil {
-							slog.Error("error closing link object", "message: ", err.Error())
-						}
-					}
-				}
-			case unix.RTM_NEWLINK:
-				if strings.HasPrefix(update.Attrs().Name, "lxc") {
-					iface, err := net.InterfaceByName(update.Attrs().Name)
-					if err != nil {
-						slog.Error("error getting interface by name", "interface", update.Attrs().Name, "error", err)
-						return
-					}
-					l, err := attachTcxToInterface(*iface, prg, attachType)
-					if err != nil {
-						slog.Error("error attaching tcx program to interface", "interface", update.Attrs().Name, "error", err)
-						return
-					}
-					activeLinks = append(activeLinks, l)
-					ifacesMap[update.Attrs().Index] = *iface
-				}
+	// 1. Ensure clsact qdisc exists
+	qdisc := &netlink.GenericQdisc{
+		QdiscAttrs: netlink.QdiscAttrs{
+			LinkIndex: link.Attrs().Index,
+			Handle:    netlink.MakeHandle(0xffff, 0),
+			Parent:    netlink.HANDLE_CLSACT,
+		},
+		QdiscType: "clsact",
+	}
 
-			}
-		}
-	}()
+	// Ignore "file exists"
+	_ = netlink.QdiscAdd(qdisc)
 
-	return done, nil
+	// 2. Select ingress or egress
+	parent := netlink.HANDLE_MIN_INGRESS
+	if !ingress {
+		parent = netlink.HANDLE_MIN_EGRESS
+	}
+
+	// 3. Attach BPF filter
+	filter := &netlink.BpfFilter{
+		FilterAttrs: netlink.FilterAttrs{
+			LinkIndex: link.Attrs().Index,
+			Parent:    uint32(parent),
+			Protocol:  unix.ETH_P_ALL,
+			Priority:  1,
+		},
+		Fd:           progFd,
+		Name:         "tc_prog",
+		DirectAction: true,
+	}
+
+	return netlink.FilterAdd(filter)
 }

@@ -77,6 +77,8 @@ type NetLedgerProgramSpecs struct {
 	CgConnect4 *ebpf.ProgramSpec `ebpf:"cg_connect4"`
 	CgEgress   *ebpf.ProgramSpec `ebpf:"cg_egress"`
 	CgIngress  *ebpf.ProgramSpec `ebpf:"cg_ingress"`
+	TcEgress   *ebpf.ProgramSpec `ebpf:"tc_egress"`
+	TcIngress  *ebpf.ProgramSpec `ebpf:"tc_ingress"`
 	TcpSockops *ebpf.ProgramSpec `ebpf:"tcp_sockops"`
 }
 
@@ -84,7 +86,8 @@ type NetLedgerProgramSpecs struct {
 //
 // It can be passed ebpf.CollectionSpec.Assign.
 type NetLedgerMapSpecs struct {
-	ConnMap *ebpf.MapSpec `ebpf:"conn_map"`
+	ConnMap            *ebpf.MapSpec `ebpf:"conn_map"`
+	HostNetworkPodsMap *ebpf.MapSpec `ebpf:"host_network_pods_map"`
 }
 
 // NetLedgerVariableSpecs contains global variables before they are loaded into the kernel.
@@ -113,12 +116,14 @@ func (o *NetLedgerObjects) Close() error {
 //
 // It can be passed to LoadNetLedgerObjects or ebpf.CollectionSpec.LoadAndAssign.
 type NetLedgerMaps struct {
-	ConnMap *ebpf.Map `ebpf:"conn_map"`
+	ConnMap            *ebpf.Map `ebpf:"conn_map"`
+	HostNetworkPodsMap *ebpf.Map `ebpf:"host_network_pods_map"`
 }
 
 func (m *NetLedgerMaps) Close() error {
 	return _NetLedgerClose(
 		m.ConnMap,
+		m.HostNetworkPodsMap,
 	)
 }
 
@@ -136,6 +141,8 @@ type NetLedgerPrograms struct {
 	CgConnect4 *ebpf.Program `ebpf:"cg_connect4"`
 	CgEgress   *ebpf.Program `ebpf:"cg_egress"`
 	CgIngress  *ebpf.Program `ebpf:"cg_ingress"`
+	TcEgress   *ebpf.Program `ebpf:"tc_egress"`
+	TcIngress  *ebpf.Program `ebpf:"tc_ingress"`
 	TcpSockops *ebpf.Program `ebpf:"tcp_sockops"`
 }
 
@@ -145,6 +152,8 @@ func (p *NetLedgerPrograms) Close() error {
 		p.CgConnect4,
 		p.CgEgress,
 		p.CgIngress,
+		p.TcEgress,
+		p.TcIngress,
 		p.TcpSockops,
 	)
 }

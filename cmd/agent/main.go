@@ -22,8 +22,8 @@ func main() {
 
 	fi := 1 * time.Second
 	startupTime := time.Now().Unix()
-	agent := agent.NewAgent(node, server, startupTime, fi)
 	objs, links, err := agent.LoadEBPF()
+	a := agent.NewAgent(objs, node, server, startupTime, fi)
 	if err != nil {
 		slog.Error("Error loading eBPF programs", "error", err)
 		os.Exit(1)
@@ -38,7 +38,7 @@ func main() {
 		}
 	}()
 
-	err = agent.Start(objs)
+	err = a.Start()
 	if err != nil {
 		slog.Error("Error starting agent", "error", err)
 		os.Exit(1)
