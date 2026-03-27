@@ -136,7 +136,8 @@ func (a *Agent) Start(objs *bpf.NetLedgerObjects) error {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	go kubernetes.WatchPods(a.onPodAdd, a.onPodDelete, a.onPodUpdate)
+	watcherStopCh := make(chan struct{})
+	go kubernetes.WatchPods(watcherStopCh, a.onPodAdd, a.onPodDelete, a.onPodUpdate)
 	go a.processPodEvents(ctx)
 
 	// Channel to listen to interrupt signals
@@ -155,6 +156,7 @@ func (a *Agent) Start(objs *bpf.NetLedgerObjects) error {
 		select {
 		case <-stop:
 			slog.Info("Shutting down...")
+			close(watcherStopCh)
 			return nil
 		case <-ctx.Done():
 			slog.Info("Shutting down...")

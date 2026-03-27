@@ -44,6 +44,7 @@ type Server struct {
 	mutex           sync.RWMutex
 	agentsHeartBeat map[string]*registeredAgent // map to track registered agents by node name
 	config          classifier.Config
+	watcherStopCh   chan struct{}
 }
 
 func NewServer(clientset *kubernetes.Clientset, serviceIpNet *net.IPNet, config classifier.Config) *Server {
@@ -58,6 +59,7 @@ func NewServer(clientset *kubernetes.Clientset, serviceIpNet *net.IPNet, config 
 		egStatistics:    metrics.StatisticMap{},
 		agentsHeartBeat: map[string]*registeredAgent{},
 		config:          config,
+		watcherStopCh:   make(chan struct{}),
 	}
 	return server
 }
@@ -107,6 +109,7 @@ func (s *Server) cleanupDeadAgents(ctx context.Context) {
 	select {
 	case <-ctx.Done():
 		slog.Info("Stopping registered agent cleanup")
+		close(s.watcherStopCh)
 		return
 	case <-ticker.C:
 		s.mutex.Lock()
@@ -122,7 +125,7 @@ func (s *Server) cleanupDeadAgents(ctx context.Context) {
 }
 
 func (s *Server) WatchPods() {
-	ck8s.WatchPods(s.clientset, s.onPodAdd, s.onPodDelete, s.onPodUpdate)
+	ck8s.WatchPods(s.watcherStopCh, s.clientset, s.onPodAdd, s.onPodDelete, s.onPodUpdate)
 }
 
 func (s *Server) onPodAdd(obj any) {
@@ -234,7 +237,7 @@ func (s *Server) onPodDelete(obj any) {
 }
 
 func (s *Server) WatchNodes() {
-	ck8s.WatchNodes(s.clientset, s.onNodeAdd, s.onNodeDelete, s.onNodeUpdate)
+	ck8s.WatchNodes(s.watcherStopCh, s.clientset, s.onNodeAdd, s.onNodeDelete, s.onNodeUpdate)
 }
 
 func (s *Server) onNodeAdd(obj any) {

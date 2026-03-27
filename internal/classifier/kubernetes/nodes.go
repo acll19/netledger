@@ -8,7 +8,7 @@ import (
 	"k8s.io/client-go/tools/cache"
 )
 
-func WatchNodes(client kubernetes.Interface, onNodeAdd, onNodeDelete func(obj any), onNodeUpdate func(oldObj, newObj any)) {
+func WatchNodes(stopCh <-chan struct{}, client kubernetes.Interface, onNodeAdd, onNodeDelete func(obj any), onNodeUpdate func(oldObj, newObj any)) {
 	watchList := cache.NewListWatchFromClient(
 		client.CoreV1().RESTClient(),
 		"nodes",
@@ -24,5 +24,5 @@ func WatchNodes(client kubernetes.Interface, onNodeAdd, onNodeDelete func(obj an
 			DeleteFunc: onNodeDelete,
 		},
 	})
-	controller.Run(make(chan struct{}))
+	controller.Run(stopCh)
 }

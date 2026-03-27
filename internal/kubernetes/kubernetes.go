@@ -51,7 +51,7 @@ func GetKubernetesClient() (*kubernetes.Clientset, error) {
 	return clientset, nil
 }
 
-func WatchPods(client kubernetes.Interface, onPodAdd, onPodDelete func(obj any), onPodUpdate func(oldObj, newObj any)) {
+func WatchPods(stopCh <-chan struct{}, client kubernetes.Interface, onPodAdd, onPodDelete func(obj any), onPodUpdate func(oldObj, newObj any)) {
 	watchList := cache.NewListWatchFromClient(
 		client.CoreV1().RESTClient(),
 		"pods",
@@ -69,6 +69,5 @@ func WatchPods(client kubernetes.Interface, onPodAdd, onPodDelete func(obj any),
 		},
 	})
 
-	// TODO: send a stop channel for graceful shotdown
-	controller.Run(make(chan struct{}))
+	controller.Run(stopCh)
 }

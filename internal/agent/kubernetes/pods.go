@@ -13,11 +13,11 @@ type PodMeta struct {
 	UID       types.UID
 }
 
-func WatchPods(onPodAdd, onPodDelete func(obj any), onPodUpdate func(oldObj, newObj any)) {
+func WatchPods(stopCh <-chan struct{}, onPodAdd, onPodDelete func(obj any), onPodUpdate func(oldObj, newObj any)) {
 	clientset, err := kubernetes.GetKubernetesClient()
 	if err != nil {
 		log.Fatalf("Error creating Kubernetes client: %v", err)
 	}
 
-	kubernetes.WatchPods(clientset, onPodAdd, onPodDelete, onPodUpdate)
+	kubernetes.WatchPods(stopCh, clientset, onPodAdd, onPodDelete, onPodUpdate)
 }
