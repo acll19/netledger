@@ -8,6 +8,7 @@ import (
 	"strings"
 	"syscall"
 
+	"github.com/acll19/netledger/internal/agent/kubernetes"
 	v1 "k8s.io/api/core/v1"
 )
 
@@ -20,7 +21,7 @@ import (
 // kubelet-kubepods-besteffort.slice/kubelet-kubepods-besteffort-pod<UID>.slice/cri-containerd-<containerID>.scope
 // kubelet-kubepods-burstable.slice/kubelet-kubepods-burstable-pod<UID>.slice/cri-containerd-<containerID>.scope
 // kubelet-kubepods-burstable.slice/kubelet-kubepods-burstable-pod<UID>.slice/docker-<containerID>.scope (KinD with docker)
-func CacheCgroupIDToPod(pod *v1.Pod, podCgroupCache map[uint64]*v1.Pod, cgroupPodCache map[string][]uint64) error {
+func CacheCgroupIDToPod(pod *v1.Pod, podCgroupCache map[uint64]*kubernetes.PodMeta, cgroupPodCache map[string][]uint64) error {
 	if pod == nil {
 		return fmt.Errorf("pod is nil")
 	}
@@ -54,7 +55,11 @@ func CacheCgroupIDToPod(pod *v1.Pod, podCgroupCache map[uint64]*v1.Pod, cgroupPo
 			continue
 		}
 
-		podCgroupCache[cgroupID] = pod
+		podCgroupCache[cgroupID] = &kubernetes.PodMeta{
+			Name:      pod.Name,
+			Namespace: pod.Namespace,
+			UID:       pod.UID,
+		}
 		cgroupPodCache[podUID] = append(cgroupPodCache[podUID], cgroupID)
 	}
 

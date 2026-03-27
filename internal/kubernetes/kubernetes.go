@@ -69,5 +69,6 @@ func WatchPods(client kubernetes.Interface, onPodAdd, onPodDelete func(obj any),
 		},
 	})
 
+	// TODO: send a stop channel for graceful shotdown
 	controller.Run(make(chan struct{}))
 }

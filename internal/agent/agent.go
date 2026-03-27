@@ -34,14 +34,15 @@ type podEvent struct {
 }
 
 type Agent struct {
-	Node           string
-	Server         string
-	StartupTime    int64
-	Interval       time.Duration
-	podCgroupCache map[uint64]*v1.Pod
-	cgroupPodCache map[string][]uint64 // map of pod UID to slice of cgroup IDs for handling pod deletions
-	podChannel     chan podEvent
-	httpClient     *http.Client
+	Node              string
+	Server            string
+	StartupTime       int64
+	Interval          time.Duration
+	croupToPodCache   map[uint64]*kubernetes.PodMeta
+	podToCgroupsCache map[string][]uint64 // map of pod UID to slice of cgroup IDs for handling pod deletions
+	podChannel        chan podEvent
+	httpClient        *http.Client
+	mLock             *sync.RWMutex
 }
 
 func NewAgent(node, server string, startupTime int64, interval time.Duration) *Agent {
@@ -60,14 +61,15 @@ func NewAgent(node, server string, startupTime int64, interval time.Duration) *A
 	}
 
 	return &Agent{
-		Node:           node,
-		Server:         server,
-		StartupTime:    startupTime,
-		Interval:       interval,
-		podCgroupCache: make(map[uint64]*v1.Pod),
-		cgroupPodCache: make(map[string][]uint64),
-		podChannel:     make(chan podEvent, 100), // TODO: consider making this buffer size configurable
-		httpClient:     httpClient,
+		Node:              node,
+		Server:            server,
+		StartupTime:       startupTime,
+		Interval:          interval,
+		croupToPodCache:   make(map[uint64]*kubernetes.PodMeta),
+		podToCgroupsCache: make(map[string][]uint64),
+		podChannel:        make(chan podEvent, 100), // TODO: consider making this buffer size configurable
+		httpClient:        httpClient,
+		mLock:             &sync.RWMutex{},
 	}
 }
 
@@ -221,7 +223,10 @@ func (a *Agent) Start(objs *bpf.NetLedgerObjects) error {
 				dstIp := network.Uint32ToIP(values[i].DstIp)
 
 				var srcPod, srcNs, dstPod, dstNs string
-				pod := a.podCgroupCache[values[i].CgroupId]
+				var pod *kubernetes.PodMeta
+				a.mLock.Lock()
+				pod = a.croupToPodCache[values[i].CgroupId]
+				a.mLock.Unlock()
 				if pod == nil {
 					// If the cgroup ID is not in the cache, it means we haven't seen a pod with that cgroup ID yet (or the pod has been deleted)
 					slog.Debug(fmt.Sprintf("cgroup ID %d not found in cache", values[i].CgroupId))
@@ -346,40 +351,39 @@ func (a *Agent) onPodUpdate(oldObj, newObj any) {
 }
 
 func (a *Agent) processPodEvents(ctx context.Context) {
-	m := sync.RWMutex{}
 	for {
 		select {
 		case <-ctx.Done():
 			slog.Info("Stopping pod event processor")
 			return
 		case evt := <-a.podChannel:
-			m.Lock()
+			a.mLock.Lock()
 			switch evt.eventType {
 			case "add":
 				slog.Debug("Pod added", "namespace", evt.pod.Namespace, "pod", evt.pod.Name)
-				err := cgroup.CacheCgroupIDToPod(evt.pod, a.podCgroupCache, a.cgroupPodCache)
+				err := cgroup.CacheCgroupIDToPod(evt.pod, a.croupToPodCache, a.podToCgroupsCache)
 				if err != nil {
 					slog.Error("Error caching cgroup ID to pod", "error", err.Error())
 				}
 			case "update":
 				slog.Debug("Pod updated", "namespace", evt.pod.Namespace, "pod", evt.pod.Name)
-				err := cgroup.CacheCgroupIDToPod(evt.pod, a.podCgroupCache, a.cgroupPodCache)
+				err := cgroup.CacheCgroupIDToPod(evt.pod, a.croupToPodCache, a.podToCgroupsCache)
 				if err != nil {
 					slog.Error("Error caching cgroup ID to pod", "error", err.Error())
 				}
 			case "delete":
 				slog.Debug("Pod deleted", "namespace", evt.pod.Namespace, "pod", evt.pod.Name)
 				uid := string(evt.pod.UID)
-				if cgroupIDs, exists := a.cgroupPodCache[uid]; exists {
+				if cgroupIDs, exists := a.podToCgroupsCache[uid]; exists {
 					for _, cgroupID := range cgroupIDs {
-						delete(a.podCgroupCache, cgroupID)
+						delete(a.croupToPodCache, cgroupID)
 					}
-					delete(a.cgroupPodCache, uid)
+					delete(a.podToCgroupsCache, uid)
 				}
 			default:
 				slog.Error("Unknown event type", "eventType", evt.eventType, "namespace", evt.pod.Namespace, "pod", evt.pod.Name)
 			}
-			m.Unlock()
+			a.mLock.Unlock()
 		}
 	}
 }
