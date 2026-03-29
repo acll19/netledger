@@ -68,7 +68,7 @@ spec:
         imagePullPolicy: IfNotPresent
         args:
         # - -server=http://172.18.0.1:8080/write-network-statistics
-        - -server=http://netledger-classifier.netledger.svc.cluster.local./write-network-statistics
+        - -server=http://netledger-classifier.netledger.svc.cluster.local/write-network-statistics
         - -node=$(NODE_NAME)
         - -log-level=debug
         env:

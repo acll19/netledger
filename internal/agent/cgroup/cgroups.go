@@ -21,16 +21,16 @@ import (
 // kubelet-kubepods-besteffort.slice/kubelet-kubepods-besteffort-pod<UID>.slice/cri-containerd-<containerID>.scope
 // kubelet-kubepods-burstable.slice/kubelet-kubepods-burstable-pod<UID>.slice/cri-containerd-<containerID>.scope
 // kubelet-kubepods-burstable.slice/kubelet-kubepods-burstable-pod<UID>.slice/docker-<containerID>.scope (KinD with docker)
-func CacheCgroupIDToPod(pod *v1.Pod, podCgroupCache map[uint64]*kubernetes.PodMeta, cgroupPodCache map[string][]uint64) error {
+func CacheCgroupIDToPod(pod *v1.Pod, cgroupToCache map[uint64]*kubernetes.PodMeta, podToCgroupCache map[string][]uint64) error {
 	if pod == nil {
 		return fmt.Errorf("pod is nil")
 	}
 
-	if podCgroupCache == nil {
+	if cgroupToCache == nil {
 		return fmt.Errorf("cgroup cache is nil")
 	}
 
-	if cgroupPodCache == nil {
+	if podToCgroupCache == nil {
 		return fmt.Errorf("cgroupPodCache is nil")
 	}
 
@@ -55,12 +55,12 @@ func CacheCgroupIDToPod(pod *v1.Pod, podCgroupCache map[uint64]*kubernetes.PodMe
 			continue
 		}
 
-		podCgroupCache[cgroupID] = &kubernetes.PodMeta{
+		cgroupToCache[cgroupID] = &kubernetes.PodMeta{
 			Name:      pod.Name,
 			Namespace: pod.Namespace,
 			UID:       pod.UID,
 		}
-		cgroupPodCache[podUID] = append(cgroupPodCache[podUID], cgroupID)
+		podToCgroupCache[podUID] = append(podToCgroupCache[podUID], cgroupID)
 	}
 
 	return allErr
