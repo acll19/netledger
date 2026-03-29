@@ -28,13 +28,6 @@ char __license[] SEC("license") = "Dual MIT/GPL";
 #define CONN_POD_ORIGINATED 0
 #define CONN_EXTERNAL_ORIGINATED 1
 
-// add minimum Ethernet header size to byte
-//  counts to better reflect actual network usage,
-//  as skb->len does not include Ethernet header
-//  Ethernet II header: 14 bytes (6-byte dest MAC + 6-byte src MAC + 2-byte type field)
-//  Frame Check Sequence (FCS/CRC): 4 bytes
-#define ETHERNET_HEADER_SIZE 18
-
 /*
  * Keyed by socket cookie.
  * This is what user space consumes.
@@ -350,8 +343,7 @@ int cg_ingress(struct __sk_buff *skb)
         c->have_src = 1;
     }
 
-    __u32 s = skb->len + ETHERNET_HEADER_SIZE;
-    __sync_fetch_and_add(&c->rx_bytes, s);
+    __sync_fetch_and_add(&c->rx_bytes, skb->len);
     return 1;
 }
 
@@ -398,7 +390,6 @@ int cg_egress(struct __sk_buff *skb)
         c->have_src = 1;
     }
 
-    __u32 s = skb->len + ETHERNET_HEADER_SIZE;
-    __sync_fetch_and_add(&c->tx_bytes, s);
+    __sync_fetch_and_add(&c->tx_bytes, skb->len);
     return 1;
 }
