@@ -64,8 +64,7 @@ func init() {
 func loadConfig() classifier.Config {
 	config, err := classifier.LoadConfig(".config/config.yaml")
 	if err != nil {
-		slog.Error("Error loading config", "error", err)
-		os.Exit(1)
+		slog.Debug("Error loading config", "error", err)
 	}
 	return config
 }
