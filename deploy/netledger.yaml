@@ -64,7 +64,7 @@ spec:
       serviceAccountName: netledger-agent
       containers:
       - name: netledger-agent
-        image: ghcr.io/acll19/netledger/netledger-agent:v0.0.1
+        image: ghcr.io/acll19/netledger/netledger-agent:v0.1.0
         imagePullPolicy: IfNotPresent
         args:
         # - -server=http://172.18.0.1:8080/write-network-statistics
@@ -205,7 +205,7 @@ spec:
       serviceAccountName: netledger-classifier
       containers:
       - name: netledger-classifier
-        image: ghcr.io/acll19/netledger/netledger-classifier:v0.0.1
+        image: ghcr.io/acll19/netledger/netledger-classifier:v0.1.0
         imagePullPolicy: IfNotPresent
         args:
           - -log-level=debug
