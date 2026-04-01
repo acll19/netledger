@@ -339,7 +339,12 @@ func (a *Agent) removeClosedConnections(
 }
 
 func (a *Agent) onPodAdd(obj any) {
-	a.podChannel <- podEvent{eventType: "add", pod: obj.(*v1.Pod)}
+	pod := obj.(*v1.Pod)
+	if pod.Status.Phase != v1.PodRunning {
+		slog.Debug("ignoring pod that is not in running state", "namespace", pod.Namespace, "pod", pod.Name, "status", pod.Status)
+		return
+	}
+	a.podChannel <- podEvent{eventType: "add", pod: pod}
 }
 
 func (a *Agent) onPodDelete(obj any) {
@@ -348,6 +353,10 @@ func (a *Agent) onPodDelete(obj any) {
 
 func (a *Agent) onPodUpdate(oldObj, newObj any) {
 	newPod := newObj.(*v1.Pod)
+	if newPod.Status.Phase != v1.PodRunning {
+		slog.Debug("ignoring updated pod that is not in running state", "namespace", newPod.Namespace, "pod", newPod.Name, "status", newPod.Status)
+		return
+	}
 	a.podChannel <- podEvent{eventType: "update", pod: newPod}
 }
 
