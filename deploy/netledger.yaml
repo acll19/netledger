@@ -145,7 +145,7 @@ metadata:
   namespace: netledger
 data:
   config.yaml: |
-    # Inspired by Kubecost's network configuration: https://github.com/kubecost/kubecost/blob/9abce5707c04e4bdf4d2fb375ad87ed168fb89bc/kubecost/values.yaml#L805
+    # Inspired by Kubecost's network cost configuration: https://github.com/kubecost/kubecost/blob/9abce5707c04e4bdf4d2fb375ad87ed168fb89bc/kubecost/values.yaml#L805
     destinations:
       in-zone:
         # Loopback Addresses in "IANA IPv4 Special-Purpose Address Registry"
@@ -208,7 +208,6 @@ spec:
         image: ghcr.io/acll19/netledger/netledger-classifier:v0.0.1
         imagePullPolicy: IfNotPresent
         args:
-          - -serviceCidr=10.11.0.0/16
           - -log-level=debug
         ports:
         - containerPort: 8080

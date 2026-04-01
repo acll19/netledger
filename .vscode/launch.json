@@ -27,8 +27,8 @@
                 "KUBECONFIG": "${userHome}/.kube/config"
             },
             "args": [
-                "-serviceCidr",
-                "10.11.0.0/16"
+                "-log-level",
+                "debug"
             ]
         }
     ]

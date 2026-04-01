@@ -4,7 +4,6 @@ import (
 	"context"
 	"flag"
 	"log/slog"
-	"net"
 	"os"
 	"os/signal"
 	"syscall"
@@ -17,14 +16,13 @@ import (
 )
 
 var (
-	serviceCidr string
-	logLevel    string
+	logLevel string
 )
 
 func main() {
 	flag.Parse()
 	log.SetupLogger(logLevel)
-	slog.Debug("log level flag", "level", logLevel)
+	slog.Info("log level flag", "level", logLevel)
 
 	clientset, err := k8s.GetKubernetesClient()
 	if err != nil {
@@ -39,14 +37,8 @@ func main() {
 	)
 	defer stop()
 
-	_, ipNet, err := net.ParseCIDR(serviceCidr)
-	if err != nil {
-		slog.Error("Error parsing service CIDR", "error", err)
-		os.Exit(1)
-	}
-
 	config := loadConfig()
-	server := server.NewServer(clientset, ipNet, config)
+	server := server.NewServer(clientset, config)
 
 	go server.WatchPods()
 	go server.WatchNodes()
@@ -57,7 +49,6 @@ func main() {
 }
 
 func init() {
-	flag.StringVar(&serviceCidr, "serviceCidr", "", "Cluster service IP range")
 	flag.StringVar(&logLevel, "log-level", "info", "Log level (debug, info, warn, error)")
 }
 

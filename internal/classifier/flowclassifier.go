@@ -39,7 +39,6 @@ type ClassifyOptions struct {
 	PodIpIndex    map[uint32]metrics.PodKey
 	NodeIndex     map[string]NodeInfo
 	NodeIpIndex   map[uint32]string
-	ServiceIpNet  *net.IPNet
 	IngStatistics metrics.StatisticMap
 	EgStatistics  metrics.StatisticMap
 	Config        Config

@@ -40,17 +40,15 @@ type Server struct {
 	egStatistics    metrics.StatisticMap
 	svcInformer     cache.SharedIndexInformer
 	epSliceInformer cache.SharedIndexInformer
-	serviceIpNet    *net.IPNet
 	mutex           sync.RWMutex
 	agentsHeartBeat map[string]*registeredAgent // map to track registered agents by node name
 	config          classifier.Config
 	watcherStopCh   chan struct{}
 }
 
-func NewServer(clientset *kubernetes.Clientset, serviceIpNet *net.IPNet, config classifier.Config) *Server {
+func NewServer(clientset *kubernetes.Clientset, config classifier.Config) *Server {
 	server := &Server{
 		clientset:       clientset,
-		serviceIpNet:    serviceIpNet,
 		podIpIndex:      map[uint32]metrics.PodKey{},
 		nodeIpIndex:     map[uint32]string{},
 		podIndex:        map[metrics.PodKey]classifier.PodInfo{},
@@ -328,7 +326,6 @@ func (s *Server) handlePayload(w http.ResponseWriter, r *http.Request) {
 		PodIpIndex:    s.podIpIndex,
 		NodeIndex:     s.nodeIndex,
 		NodeIpIndex:   s.nodeIpIndex,
-		ServiceIpNet:  s.serviceIpNet,
 		IngStatistics: s.ingStatistics,
 		EgStatistics:  s.egStatistics,
 		Config:        s.config,
