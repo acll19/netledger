@@ -5,6 +5,7 @@ import (
 	"log/slog"
 	"net"
 	"net/netip"
+	"sync"
 
 	"github.com/acll19/netledger/internal/classifier/metrics"
 	"github.com/acll19/netledger/internal/network"
@@ -42,6 +43,7 @@ type ClassifyOptions struct {
 	IngStatistics metrics.StatisticMap
 	EgStatistics  metrics.StatisticMap
 	Config        Config
+	Mutex         *sync.RWMutex
 }
 
 func Classify(data payload.Flow, opts ClassifyOptions) []FlowLog {
@@ -85,6 +87,8 @@ func Classify(data payload.Flow, opts ClassifyOptions) []FlowLog {
 			flowKey.Namespace = srcPod.Namespace
 			flowKey.PodInitiated = true
 			currentFlow := opts.EgStatistics[flowKey]
+
+			opts.Mutex.Lock()
 			opts.EgStatistics[flowKey] = metrics.FlowSize{
 				Traffic: entry.TxBytes + currentFlow.Traffic,
 			}
@@ -93,6 +97,7 @@ func Classify(data payload.Flow, opts ClassifyOptions) []FlowLog {
 			opts.IngStatistics[flowKey] = metrics.FlowSize{
 				Traffic: entry.RxBytes + currentFlow.Traffic,
 			}
+			opts.Mutex.Unlock()
 		case network.Ingress:
 			classified := doClassify(srcIp, dstRegion, dstZone, &flowKey, opts.Config)
 			if !classified {
@@ -105,6 +110,8 @@ func Classify(data payload.Flow, opts ClassifyOptions) []FlowLog {
 			flowKey.PodName = dstPod.Name
 			flowKey.Namespace = dstPod.Namespace
 			currentFlow := opts.IngStatistics[flowKey]
+
+			opts.Mutex.Lock()
 			opts.IngStatistics[flowKey] = metrics.FlowSize{
 				Traffic: entry.RxBytes + currentFlow.Traffic,
 			}
@@ -113,6 +120,7 @@ func Classify(data payload.Flow, opts ClassifyOptions) []FlowLog {
 			opts.EgStatistics[flowKey] = metrics.FlowSize{
 				Traffic: entry.TxBytes + currentFlow.Traffic,
 			}
+			opts.Mutex.Unlock()
 		}
 
 		flowLogs = append(flowLogs, FlowLog{

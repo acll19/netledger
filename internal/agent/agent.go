@@ -47,15 +47,14 @@ type Agent struct {
 
 func NewAgent(node, server string, startupTime int64, interval time.Duration) *Agent {
 	var httpClient = &http.Client{
-		Timeout: 2 * time.Second, // TODO: consider making this configurable
+		Timeout: 5 * time.Second, // TODO: consider making this configurable
 		Transport: &http.Transport{
-			DisableKeepAlives: true,
 			DialContext: (&net.Dialer{
-				Timeout:   500 * time.Millisecond, // TODO: consider making this configurable
-				KeepAlive: 30 * time.Second,       // TODO: consider making this configurable
+				Timeout:   2 * time.Second,  // TODO: consider making this configurable
+				KeepAlive: 30 * time.Second, // TODO: consider making this configurable
 			}).DialContext,
-			TLSHandshakeTimeout:   500 * time.Millisecond, // TODO: consider making this configurable
-			ResponseHeaderTimeout: 1 * time.Second,        // TODO: consider making this configurable
+			TLSHandshakeTimeout:   2 * time.Second,        // TODO: consider making this configurable
+			ResponseHeaderTimeout: 3 * time.Second,        // TODO: consider making this configurable
 			ExpectContinueTimeout: 200 * time.Millisecond, // TODO: consider making this configurable
 		},
 	}
@@ -185,7 +184,7 @@ func (a *Agent) Start(objs *bpf.NetLedgerObjects) error {
 			keys = keys[:n]
 			values = values[:n]
 
-			slog.Debug("debug printing", "keys", len(keys), "started with", n, "keys before filtering to host-local pods", len(keys))
+			slog.Debug("debug printing", "keys", len(keys), "started with", n)
 			entries := make([]payload.FlowEntry, 0, len(keys))
 
 			for i := range len(keys) {

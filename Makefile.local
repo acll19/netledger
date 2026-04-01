@@ -2,7 +2,7 @@ build-agent:
 	go generate ./...
 	./build.sh netledger-agent ./cmd/agent/main.go
 	docker build --platform=linux/amd64 -f Dockerfile.agent -t ghcr.io/acll19/netledger/netledger-agent:v0.0.1 .
-	kind load docker-image ghcr.io/acll19/netledger/netledger-agent:v0.0.10 --name netledger-cilium
+	kind load docker-image ghcr.io/acll19/netledger/netledger-agent:v0.0.1 --name netledger-cilium
 	kubectl rollout restart ds/netledger-agent
 
 build-classifier:

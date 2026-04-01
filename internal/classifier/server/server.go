@@ -332,6 +332,7 @@ func (s *Server) handlePayload(w http.ResponseWriter, r *http.Request) {
 		IngStatistics: s.ingStatistics,
 		EgStatistics:  s.egStatistics,
 		Config:        s.config,
+		Mutex:         &s.mutex,
 	}
 
 	// Do not classify flows from agents that have recently restarted to protect against delta spikes in
@@ -355,12 +356,10 @@ func (s *Server) handlePayload(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	s.mutex.Lock()
 	flowLogs := classifier.Classify(
 		data,
 		classifyOptions,
 	)
-	s.mutex.Unlock()
 
 	for _, fl := range flowLogs {
 		slog.Debug(

@@ -65,7 +65,7 @@ spec:
       containers:
       - name: netledger-agent
         image: ghcr.io/acll19/netledger/netledger-agent:v0.0.1
-        imagePullPolicy: Always
+        imagePullPolicy: IfNotPresent
         args:
         # - -server=http://172.18.0.1:8080/write-network-statistics
         - -server=http://netledger-classifier.netledger.svc.cluster.local/write-network-statistics
@@ -78,7 +78,7 @@ spec:
               fieldPath: spec.nodeName
         securityContext:
           privileged: true
-          readOnlyRootFilesystem: true
+          readOnlyRootFilesystem: false
         volumeMounts:
         - name: bpffs
           mountPath: /sys/fs/bpf
@@ -206,7 +206,7 @@ spec:
       containers:
       - name: netledger-classifier
         image: ghcr.io/acll19/netledger/netledger-classifier:v0.0.1
-        imagePullPolicy: Always
+        imagePullPolicy: IfNotPresent
         args:
           - -serviceCidr=10.11.0.0/16
           - -log-level=debug
