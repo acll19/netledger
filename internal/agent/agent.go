@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
-	"math"
 	"net"
 	"net/http"
 	"os"
@@ -31,6 +30,14 @@ import (
 type podEvent struct {
 	eventType string
 	pod       *v1.Pod
+}
+
+type connLastSeen struct {
+	lastSeen       time.Time
+	lastDeltaCount uint64
+	txBytes        uint64
+	rxBytes        uint64
+	zeroCountSince *time.Time
 }
 
 type Agent struct {
@@ -149,7 +156,6 @@ func (a *Agent) Start(objs *bpf.NetLedgerObjects) error {
 	size := objs.ConnMap.MaxEntries()
 	keys := make([]uint64, size)
 	values := make([]bpf.NetLedgerConnVal, size)
-	lastSeen := make(map[uint64]bpf.NetLedgerConnVal, size) // map[key]value for calculating deltas
 
 	for {
 		select {
@@ -161,8 +167,6 @@ func (a *Agent) Start(objs *bpf.NetLedgerObjects) error {
 			slog.Info("Shutting down...")
 			return nil
 		case <-ticker.C:
-			slog.Debug("reading data from eBPF maps")
-
 			keys = keys[:size]
 			values = values[:size]
 			opts := &ebpf.BatchOptions{}
@@ -172,7 +176,7 @@ func (a *Agent) Start(objs *bpf.NetLedgerObjects) error {
 			if err != nil && !errors.Is(err, ebpf.ErrKeyNotExist) {
 				errMsg = err.Error()
 			}
-			slog.Debug("batch lookup result", "received entries", strconv.Itoa(n), "err", errMsg, "mapSize", strconv.FormatUint(uint64(objs.ConnMap.MaxEntries()), 10))
+			slog.Info("reading eBPF map", "received entries", strconv.Itoa(n), "err", errMsg, "mapSize", strconv.FormatUint(uint64(objs.ConnMap.MaxEntries()), 10))
 			if n <= 0 {
 				slog.Debug("no data, skipping")
 				continue
@@ -201,21 +205,8 @@ func (a *Agent) Start(objs *bpf.NetLedgerObjects) error {
 					continue
 				}
 
-				lastVal, found := lastSeen[keys[i]]
 				tx := values[i].TxBytes
 				rx := values[i].RxBytes
-				if found {
-					tx -= lastVal.TxBytes
-					if tx == math.MaxUint64 {
-						tx = values[i].TxBytes
-					}
-					rx -= lastVal.RxBytes
-					if rx == math.MaxUint64 {
-						rx = values[i].RxBytes
-					}
-				}
-				lastSeen[keys[i]] = values[i]
-
 				if tx == 0 && rx == 0 {
 					continue
 				}
@@ -287,7 +278,8 @@ func (a *Agent) Start(objs *bpf.NetLedgerObjects) error {
 				}()
 			}
 
-			a.removeClosedConnections(lastSeen, keys, values, objs.ConnMap)
+			a.removeClosedConnections(keys, values, objs.ConnMap)
+			a.resetCounters(keys, objs)
 		}
 	}
 }
@@ -323,7 +315,6 @@ func (a *Agent) sendDataToServer(ctx context.Context, flowEntries []payload.Flow
 }
 
 func (a *Agent) removeClosedConnections(
-	lastSeen map[uint64]bpf.NetLedgerConnVal,
 	currentConnsKeys []uint64,
 	currentConnsValues []bpf.NetLedgerConnVal,
 	connMap *ebpf.Map) {
@@ -333,8 +324,21 @@ func (a *Agent) removeClosedConnections(
 			if err := connMap.Delete(currentConnsKeys[i]); err != nil {
 				slog.Error("error deleting closed connection from map", "key", currentConnsKeys[i], "error", err.Error())
 			}
-			delete(lastSeen, currentConnsKeys[i])
 		}
+	}
+}
+
+func (*Agent) resetCounters(keys []uint64, objs *bpf.NetLedgerObjects) {
+	for i := range keys {
+		var latest bpf.NetLedgerConnVal
+		if err := objs.ConnMap.Lookup(keys[i], &latest); err != nil {
+			continue
+		}
+
+		latest.TxBytes = 0
+		latest.RxBytes = 0
+
+		objs.ConnMap.Update(keys[i], &latest, ebpf.UpdateAny)
 	}
 }
 

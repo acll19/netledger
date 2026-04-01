@@ -20,7 +20,7 @@ func main() {
 	flag.Parse()
 	log.SetupLogger(logLevel)
 
-	fi := 10 * time.Second // TODO: consider making this configurable
+	fi := 1 * time.Minute // TODO: consider making this configurable
 	startupTime := time.Now().Unix()
 	agent := agent.NewAgent(node, server, startupTime, fi)
 	objs, links, err := agent.LoadEBPF()
