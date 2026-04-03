@@ -12,24 +12,24 @@ NetLedger consists of two main components:
 ## Features
 
 - **eBPF-based Monitoring**: Captures network flows with minimal overhead using kernel-level eBPF programs
-- **Kubernetes Integration**: Native awareness of Kubernetes workloads and network policies
+- **Kubernetes Integration**: Native awareness of Kubernetes workloads
 - **Connection Tracking**: Monitors TCP and UDP connections across pod boundaries
 - **Byte Accounting**: Tracking of ingress and egress bytes per connection
 
 ## Requirements
 
 - Linux kernel v4.10 or above.
-- Cilium with kube-proxy replacement mode on (`cilium-dbg status` should show `KubeProxyReplacement:    True`).
+- Cilium 1.18.4 or above with kube-proxy replacement mode on (`cilium-dbg status` should show `KubeProxyReplacement:    True`).
 - Kubernetes cluster with cgroup v2 enabled.
 
 ## Limitations
 
-- Only IPv4 traffic is currently supported. IPv6 traffic is not monitored.
-- Only TCP and UDP traffic is currently supported. ICMP and other protocols are not monitored.
+- Only IPv4 traffic is currently supported.
+- Only TCP and UDP traffic is currently supported.
 
 ## Deploy
 
-Netledger is designed to be deployed on Kubernetes. At the moment the only way to deploy it is by applying the manifests in the [deploy](./deploy/) directory. This will create a Deployment named **netledger-classifier** and a DaemonSet named **netledger-agent**. The agent creates a privileged pods.
+Netledger is designed to be deployed on Kubernetes. At the moment the only way to deploy it is by applying the manifest in the [deploy](./deploy/) directory. This will create a Deployment named **netledger-classifier** and a DaemonSet named **netledger-agent**. The agent creates a privileged pods.
 Feel free to modify the `netledger-classifier-config` ConfigMap according to your needs.
 
 ## Metrics
