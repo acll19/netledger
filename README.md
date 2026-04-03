@@ -58,11 +58,11 @@ make [-f Makefile.local] build-classifier
 This project is a fork of [polarsignals/kubezonnet](https://github.com/polarsignals/kubezonnet)
 
 Key changes from the original:
-- Restructured project layout into
+- Restructured project layout
 - Added internet classification
 - Changed exported metrics name and description
 - Replaced netfilter eBPF program with a set of cgroup programs
 
 ## License
 
-This project is licensed under the Apache License 2.0 (see the [LICENSE](LICENSE) file for details). The eBPF has a dual license (MIT and GPL).
+This project is licensed under the Apache License 2.0 (see the [LICENSE](LICENSE) file for details). The eBPF program has a dual license (MIT and GPL).
