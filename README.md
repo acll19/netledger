@@ -7,7 +7,7 @@ NetLedger is a network telemetry system that leverages eBPF (extended Berkeley P
 NetLedger consists of two main components:
 
 - **Agent**: Deployed on each Kubernetes node, the agent uses eBPF programs to capture network flow information at the kernel level, including connection tuples, byte counters, and flow state. It supports both egress and ingress traffic monitoring.
-- **Classifier**: Aggregates flow data from agents and performs traffic classification with awareness of Kubernetes metadata (pods, services, namespaces).
+- **Classifier**: Aggregates flow data from agents and performs traffic classification with awareness of Kubernetes metadata (pods, namespaces).
 
 ## Features
 
