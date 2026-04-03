@@ -29,7 +29,7 @@ NetLedger consists of two main components:
 
 ## Deploy
 
-Netledger is designed to be deployed on Kubernetes. At the moment the only way to deploy it is by applying the manifest in the [deploy](./deploy/) directory. This will create a Deployment named **netledger-classifier** and a DaemonSet named **netledger-agent**. The agent creates a privileged pods.
+Netledger is designed to be deployed on Kubernetes. You can apply the sample manifests in the [deploy](./deploy/) directory. This will create a Deployment named **netledger-classifier** and a DaemonSet named **netledger-agent**. The agent creates a privileged pods.
 Feel free to modify the `netledger-classifier-config` ConfigMap according to your needs.
 
 ## Metrics
