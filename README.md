@@ -49,7 +49,8 @@ Note that `pod_initiated=true` means that pod with `<pod_name>` has initiated th
 The project uses eBPF programs compiled with libbpf. Build artifacts are generated from the eBPF source code.
 
 ```bash
-make build
+make [-f Makefile.local] build-agent
+make [-f Makefile.local] build-classifier
 ```
 
 ## Acknowledgments / Origin
