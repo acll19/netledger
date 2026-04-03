@@ -20,7 +20,8 @@ NetLedger consists of two main components:
 
 - Linux kernel v4.10 or above.
 - Cilium 1.18.4 or above with kube-proxy replacement mode on (`cilium-dbg status` should show `KubeProxyReplacement:    True`).
-- Kubernetes cluster with cgroup v2 enabled.
+- Kubernetes 1.27.3 or above
+- cgroup v2 enabled in the nodes.
 
 ## Limitations
 
