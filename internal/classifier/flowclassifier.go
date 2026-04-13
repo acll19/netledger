@@ -85,9 +85,9 @@ func Classify(data payload.Flow, opts ClassifyOptions) []FlowLog {
 			flowKey.PodName = srcPod.Name
 			flowKey.Namespace = srcPod.Namespace
 			flowKey.PodInitiated = true
-			currentFlow := opts.EgStatistics[flowKey]
 
 			opts.Mutex.Lock()
+			currentFlow := opts.EgStatistics[flowKey]
 			opts.EgStatistics[flowKey] = metrics.FlowSize{
 				Traffic: entry.TxBytes + currentFlow.Traffic,
 			}
@@ -108,9 +108,9 @@ func Classify(data payload.Flow, opts ClassifyOptions) []FlowLog {
 
 			flowKey.PodName = dstPod.Name
 			flowKey.Namespace = dstPod.Namespace
-			currentFlow := opts.IngStatistics[flowKey]
 
 			opts.Mutex.Lock()
+			currentFlow := opts.IngStatistics[flowKey]
 			opts.IngStatistics[flowKey] = metrics.FlowSize{
 				Traffic: entry.RxBytes + currentFlow.Traffic,
 			}

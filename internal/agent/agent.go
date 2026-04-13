@@ -32,14 +32,6 @@ type podEvent struct {
 	pod       *v1.Pod
 }
 
-type connLastSeen struct {
-	lastSeen       time.Time
-	lastDeltaCount uint64
-	txBytes        uint64
-	rxBytes        uint64
-	zeroCountSince *time.Time
-}
-
 type Agent struct {
 	Node              string
 	Server            string
@@ -47,9 +39,11 @@ type Agent struct {
 	Interval          time.Duration
 	cgroupToPodCache  map[uint64]*kubernetes.PodMeta
 	podToCgroupsCache map[string][]uint64 // map of pod UID to slice of cgroup IDs for handling pod deletions
-	podChannel        chan podEvent
+	podEventsCh       chan podEvent
 	httpClient        *http.Client
 	mLock             *sync.RWMutex
+
+	objs *bpf.NetLedgerObjects
 }
 
 func NewAgent(node, server string, startupTime int64, interval time.Duration) *Agent {
@@ -73,7 +67,7 @@ func NewAgent(node, server string, startupTime int64, interval time.Duration) *A
 		Interval:          interval,
 		cgroupToPodCache:  make(map[uint64]*kubernetes.PodMeta),
 		podToCgroupsCache: make(map[string][]uint64),
-		podChannel:        make(chan podEvent, 100), // TODO: consider making this buffer size configurable
+		podEventsCh:       make(chan podEvent, 100), // TODO: consider making this buffer size configurable
 		httpClient:        httpClient,
 		mLock:             &sync.RWMutex{},
 	}
@@ -93,6 +87,11 @@ func (a *Agent) LoadEBPF() (*bpf.NetLedgerObjects, []link.Link, error) {
 	if err := os.MkdirAll("/sys/fs/bpf/netledger", 0755); err != nil {
 		return nil, nil, fmt.Errorf("error creating directory for pinning eBPF maps: %w", err)
 	}
+
+	// TODO: map max entries should come from config
+	// to do that, the agent must check if map entries has changed and if so it must delete the pinned
+	// map before loading. Otherwise the program will fail to load. This will caused dropped tracked connections
+
 	var objs bpf.NetLedgerObjects
 	opts := &ebpf.CollectionOptions{
 		Maps: ebpf.MapOptions{
@@ -102,6 +101,8 @@ func (a *Agent) LoadEBPF() (*bpf.NetLedgerObjects, []link.Link, error) {
 	if err := spec.LoadAndAssign(&objs, opts); err != nil {
 		return nil, nil, fmt.Errorf("load eBPF objects: %w", err)
 	}
+
+	a.objs = &objs
 
 	activeLinks := make([]link.Link, 0)
 	cgroupEgressLink, err := bpf.AttachRootCgroup(objs.CgEgress, ebpf.AttachCGroupInetEgress)
@@ -116,18 +117,6 @@ func (a *Agent) LoadEBPF() (*bpf.NetLedgerObjects, []link.Link, error) {
 	}
 	activeLinks = append(activeLinks, cgroupIngressLink)
 
-	cgroupConnectLink, err := bpf.AttachRootCgroup(objs.CgConnect4, ebpf.AttachCGroupInet4Connect)
-	if err != nil {
-		return nil, nil, fmt.Errorf("attach cgroup skb: %w", err)
-	}
-	activeLinks = append(activeLinks, cgroupConnectLink)
-
-	cgroupBindLink, err := bpf.AttachRootCgroup(objs.CgBind4, ebpf.AttachCGroupInet4Bind)
-	if err != nil {
-		return nil, nil, fmt.Errorf("attach cgroup skb: %w", err)
-	}
-	activeLinks = append(activeLinks, cgroupBindLink)
-
 	cgroupSockopsLink, err := bpf.AttachRootCgroup(objs.TcpSockops, ebpf.AttachCGroupSockOps)
 	if err != nil {
 		return nil, nil, fmt.Errorf("attach cgroup skb: %w", err)
@@ -138,13 +127,14 @@ func (a *Agent) LoadEBPF() (*bpf.NetLedgerObjects, []link.Link, error) {
 	return &objs, activeLinks, nil
 }
 
-func (a *Agent) Start(objs *bpf.NetLedgerObjects) error {
+func (a *Agent) Start() error {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
 	watcherStopCh := make(chan struct{})
 	go kubernetes.WatchPods(watcherStopCh, a.onPodAdd, a.onPodDelete, a.onPodUpdate)
 	go a.processPodEvents(ctx)
+	go a.cleanUpStaleConnections(ctx)
 
 	// Channel to listen to interrupt signals
 	stop := make(chan os.Signal, 1)
@@ -153,9 +143,9 @@ func (a *Agent) Start(objs *bpf.NetLedgerObjects) error {
 	ticker := time.NewTicker(a.Interval)
 	defer ticker.Stop()
 
-	size := objs.ConnMap.MaxEntries()
-	keys := make([]uint64, size)
-	values := make([]bpf.NetLedgerConnVal, size)
+	size := a.objs.ConnStats.MaxEntries()
+	sKeys := make([]uint64, size)
+	stats := make([]bpf.NetLedgerConnStats, size)
 
 	for {
 		select {
@@ -167,16 +157,16 @@ func (a *Agent) Start(objs *bpf.NetLedgerObjects) error {
 			slog.Info("Shutting down...")
 			return nil
 		case <-ticker.C:
-			keys = keys[:size]
-			values = values[:size]
+			sKeys = sKeys[:size]
+			stats = stats[:size]
 			opts := &ebpf.BatchOptions{}
 			cursor := new(ebpf.MapBatchCursor)
-			n, err := objs.ConnMap.BatchLookup(cursor, keys, values, opts)
+			n, err := a.objs.ConnStats.BatchLookupAndDelete(cursor, sKeys, stats, opts)
 			var errMsg string
 			if err != nil && !errors.Is(err, ebpf.ErrKeyNotExist) {
 				errMsg = err.Error()
 			}
-			slog.Info("reading eBPF map", "received entries", strconv.Itoa(n), "err", errMsg, "mapSize", strconv.FormatUint(uint64(objs.ConnMap.MaxEntries()), 10))
+			slog.Info("reading eBPF map", "received entries", strconv.Itoa(n), "err", errMsg, "mapSize", strconv.FormatUint(uint64(a.objs.ConnStats.MaxEntries()), 10))
 			if n <= 0 {
 				slog.Debug("no data, skipping")
 				continue
@@ -185,66 +175,66 @@ func (a *Agent) Start(objs *bpf.NetLedgerObjects) error {
 				slog.Error("failed to read data", "message", err.Error())
 				continue
 			}
-			keys = keys[:n]
-			values = values[:n]
 
-			slog.Debug("debug printing", "keys", len(keys), "started with", n)
-			entries := make([]payload.FlowEntry, 0, len(keys))
+			sKeys = sKeys[:n]
+			stats = stats[:n]
 
-			for i := range len(keys) {
+			slog.Debug("debug printing", "keys", len(sKeys), "started with", n)
+			entries := make([]payload.FlowEntry, 0, len(sKeys))
+
+			for i := range len(sKeys) {
 				// Filter out entries that are not associated with any cgroup (i.e., not associated with any process)
-				if values[i].CgroupId == 0 {
+				if stats[i].CgroupId == 0 {
 					continue
 				}
 
-				if values[i].HaveSrc == 0 || values[i].HaveDst == 0 {
+				if stats[i].TxBytes == 0 && stats[i].RxBytes == 0 {
 					continue
 				}
-
-				if values[i].TxBytes == 0 && values[i].RxBytes == 0 {
-					continue
-				}
-
-				tx := values[i].TxBytes
-				rx := values[i].RxBytes
-				if tx == 0 && rx == 0 {
-					continue
-				}
-
-				srcIp := network.Uint32ToIP(values[i].SrcIp)
-				dstIp := network.Uint32ToIP(values[i].DstIp)
 
 				var srcPod, srcNs, dstPod, dstNs string
+				var srcIp, dstIp net.IP
+				var sport, dport uint16
 				var pod *kubernetes.PodMeta
+
 				a.mLock.Lock()
-				pod = a.cgroupToPodCache[values[i].CgroupId]
+				pod = a.cgroupToPodCache[stats[i].CgroupId]
 				a.mLock.Unlock()
 				if pod == nil {
 					// If the cgroup ID is not in the cache, it means we haven't seen a pod with that cgroup ID yet (or the pod has been deleted)
-					slog.Debug(fmt.Sprintf("cgroup ID %d not found in cache", values[i].CgroupId))
+					slog.Debug(
+						fmt.Sprintf("cgroup ID %d not found in cache", stats[i].CgroupId),
+						"src:port", fmt.Sprintf("%s:%d", network.Uint32ToIP(stats[i].DstIp4).To4().String(), stats[i].DstPort),
+						"dst:port", fmt.Sprintf("%s:%d", network.Uint32ToIP(stats[i].SrcIp4).To4().String(), stats[i].SrcPort),
+					)
 					continue
 				}
 
-				if values[i].ConnDirection == network.Egress {
+				if stats[i].ConnDirection == network.Egress {
 					srcPod = pod.Name
 					srcNs = pod.Namespace
+					srcIp = network.Uint32ToIP(stats[i].SrcIp4)
+					sport = stats[i].SrcPort
+					dstIp = network.Uint32ToIP(stats[i].DstIp4)
+					dport = stats[i].DstPort
 				} else {
 					dstPod = pod.Name
 					dstNs = pod.Namespace
+					srcIp = network.Uint32ToIP(stats[i].DstIp4)
+					sport = stats[i].SrcPort
+					dstIp = network.Uint32ToIP(stats[i].SrcIp4)
+					dport = stats[i].DstPort
 				}
-
-				sport := values[i].SrcPort
-				dport := values[i].DstPort
 
 				srcAddr := fmt.Sprintf("%s:%d", srcIp.To4().String(), sport)
 				dstAddr := fmt.Sprintf("%s:%d", dstIp.To4().String(), dport)
 
 				slog.Debug(fmt.Sprintf("[Direction %d] %s -> %s: %d tx bytes, %d rx bytes (srcPod: %s/%s, dstPod: %s/%s)",
-					values[i].ConnDirection,
+					stats[i].ConnDirection,
 					srcAddr,
 					dstAddr,
-					values[i].TxBytes,
-					values[i].RxBytes,
+					stats[i].TxBytes,
+					stats[i].RxBytes,
 					srcNs,
 					srcPod,
 					dstNs,
@@ -252,13 +242,13 @@ func (a *Agent) Start(objs *bpf.NetLedgerObjects) error {
 				))
 
 				entry := payload.FlowEntry{
-					Direction:       int(values[i].ConnDirection),
+					Direction:       int(stats[i].ConnDirection),
 					SrcIP:           srcIp.To4().String(),
 					SrcPort:         sport,
 					DstIP:           dstIp.To4().String(),
 					DstPort:         dport,
-					TxBytes:         tx,
-					RxBytes:         rx,
+					TxBytes:         stats[i].TxBytes,
+					RxBytes:         stats[i].RxBytes,
 					SrcPodName:      srcPod,
 					SrcPodNamespace: srcNs,
 					DstPodName:      dstPod,
@@ -269,7 +259,7 @@ func (a *Agent) Start(objs *bpf.NetLedgerObjects) error {
 
 			if len(entries) > 0 {
 				go func() {
-					slog.Debug(fmt.Sprintf("Sending %d entries to API server", len(entries)))
+					slog.Debug(fmt.Sprintf("Sending %d entries to classifier", len(entries)))
 					serverCtx := context.WithoutCancel(context.Background())
 					err := a.sendDataToServer(serverCtx, entries, a.StartupTime)
 					if err != nil {
@@ -277,9 +267,6 @@ func (a *Agent) Start(objs *bpf.NetLedgerObjects) error {
 					}
 				}()
 			}
-
-			a.removeClosedConnections(keys, values, objs.ConnMap)
-			a.resetCounters(keys, objs)
 		}
 	}
 }
@@ -314,54 +301,90 @@ func (a *Agent) sendDataToServer(ctx context.Context, flowEntries []payload.Flow
 	return nil
 }
 
-func (a *Agent) removeClosedConnections(
-	currentConnsKeys []uint64,
-	currentConnsValues []bpf.NetLedgerConnVal,
-	connMap *ebpf.Map) {
-
-	for i := range len(currentConnsKeys) {
-		if currentConnsValues[i].ConnectionClosed == 1 {
-			if err := connMap.Delete(currentConnsKeys[i]); err != nil {
-				slog.Error("error deleting closed connection from map", "key", currentConnsKeys[i], "error", err.Error())
-			}
-		}
-	}
-}
-
-func (*Agent) resetCounters(keys []uint64, objs *bpf.NetLedgerObjects) {
-	for i := range keys {
-		var latest bpf.NetLedgerConnVal
-		if err := objs.ConnMap.Lookup(keys[i], &latest); err != nil {
-			continue
-		}
-
-		latest.TxBytes = 0
-		latest.RxBytes = 0
-
-		objs.ConnMap.Update(keys[i], &latest, ebpf.UpdateAny)
-	}
-}
-
 func (a *Agent) onPodAdd(obj any) {
 	pod := obj.(*v1.Pod)
 	if pod.Status.Phase != v1.PodRunning {
 		slog.Debug("ignoring pod that is not in running state", "namespace", pod.Namespace, "pod", pod.Name, "status", pod.Status)
 		return
 	}
-	a.podChannel <- podEvent{eventType: "add", pod: pod}
+	a.podEventsCh <- podEvent{eventType: "add", pod: pod}
 }
 
 func (a *Agent) onPodDelete(obj any) {
-	a.podChannel <- podEvent{eventType: "delete", pod: obj.(*v1.Pod)}
+	a.podEventsCh <- podEvent{eventType: "delete", pod: obj.(*v1.Pod)}
 }
 
 func (a *Agent) onPodUpdate(oldObj, newObj any) {
 	newPod := newObj.(*v1.Pod)
-	if newPod.Status.Phase != v1.PodRunning {
-		slog.Debug("ignoring updated pod that is not in running state", "namespace", newPod.Namespace, "pod", newPod.Name, "status", newPod.Status)
+
+	var et string
+	switch newPod.Status.Phase {
+	case v1.PodRunning:
+		et = "update"
+	case v1.PodSucceeded:
+		et = "delete" // trigger cleanup of cgroup cache and stale entries in ebpf maps
+	case v1.PodFailed:
+		et = "delete"
+	default:
+		slog.Debug("ignoring updated pod that is not in relevant state (running, succeeded or failed)", "namespace", newPod.Namespace, "pod", newPod.Name, "status", newPod.Status)
 		return
 	}
-	a.podChannel <- podEvent{eventType: "update", pod: newPod}
+
+	a.podEventsCh <- podEvent{eventType: et, pod: newPod}
+}
+
+func (a *Agent) cleanUpStaleConnections(ctx context.Context) {
+	ticker := time.NewTicker(1 * time.Minute) // TODO: consider making this interval configurable
+	defer ticker.Stop()
+	size := a.objs.ConnMeta.MaxEntries()
+	mKeys := make([]uint64, size)
+	mValues := make([]bpf.NetLedgerConnMeta, size)
+
+	for {
+		select {
+		case <-ctx.Done():
+			slog.Info("Stopping stale connection cleanup")
+			return
+		case <-ticker.C:
+			mKeys = mKeys[:size]
+			mValues = mValues[:size]
+			opts := &ebpf.BatchOptions{}
+			cursor := new(ebpf.MapBatchCursor)
+			n, err := a.objs.ConnMeta.BatchLookup(cursor, mKeys, mValues, opts)
+			if err != nil && !errors.Is(err, ebpf.ErrKeyNotExist) {
+				slog.Error("failed to read data for stale connection cleanup", "message", err.Error())
+				continue
+			}
+
+			if n <= 0 {
+				slog.Debug("no data for stale connection cleanup, skipping")
+				continue
+			}
+
+			if err != nil && !errors.Is(err, ebpf.ErrKeyNotExist) {
+				slog.Error("failed to read data for stale connection cleanup", "message", err.Error())
+				continue
+			}
+
+			mKeys = mKeys[:n]
+			mValues = mValues[:n]
+
+			staledConns := make([]uint64, 0, n)
+			for i := range len(mKeys) {
+				cgroup := mValues[i].CgroupId
+				if _, exist := a.cgroupToPodCache[cgroup]; !exist {
+					staledConns = append(staledConns, mKeys[i])
+				}
+			}
+
+			if len(staledConns) > 0 {
+				slog.Info("Cleaning up stale connections", "count", len(staledConns))
+				if _, err := a.objs.ConnMeta.BatchDelete(staledConns, nil); err != nil {
+					slog.Error("failed to delete stale connections", "message", err.Error())
+				}
+			}
+		}
+	}
 }
 
 func (a *Agent) processPodEvents(ctx context.Context) {
@@ -370,7 +393,7 @@ func (a *Agent) processPodEvents(ctx context.Context) {
 		case <-ctx.Done():
 			slog.Info("Stopping pod event processor")
 			return
-		case evt := <-a.podChannel:
+		case evt := <-a.podEventsCh:
 			a.mLock.Lock()
 			switch evt.eventType {
 			case "add":

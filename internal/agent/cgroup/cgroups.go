@@ -21,12 +21,12 @@ import (
 // kubelet-kubepods-besteffort.slice/kubelet-kubepods-besteffort-pod<UID>.slice/cri-containerd-<containerID>.scope
 // kubelet-kubepods-burstable.slice/kubelet-kubepods-burstable-pod<UID>.slice/cri-containerd-<containerID>.scope
 // kubelet-kubepods-burstable.slice/kubelet-kubepods-burstable-pod<UID>.slice/docker-<containerID>.scope (KinD with docker)
-func CacheCgroupIDToPod(pod *v1.Pod, cgroupToCache map[uint64]*kubernetes.PodMeta, podToCgroupCache map[string][]uint64) error {
+func CacheCgroupIDToPod(pod *v1.Pod, cgroupToPodCache map[uint64]*kubernetes.PodMeta, podToCgroupCache map[string][]uint64) error {
 	if pod == nil {
 		return fmt.Errorf("pod is nil")
 	}
 
-	if cgroupToCache == nil {
+	if cgroupToPodCache == nil {
 		return fmt.Errorf("cgroup cache is nil")
 	}
 
@@ -55,7 +55,7 @@ func CacheCgroupIDToPod(pod *v1.Pod, cgroupToCache map[uint64]*kubernetes.PodMet
 			continue
 		}
 
-		cgroupToCache[cgroupID] = &kubernetes.PodMeta{
+		cgroupToPodCache[cgroupID] = &kubernetes.PodMeta{
 			Name:      pod.Name,
 			Namespace: pod.Namespace,
 			UID:       pod.UID,

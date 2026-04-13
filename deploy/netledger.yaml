@@ -82,11 +82,16 @@ spec:
         volumeMounts:
         - name: bpffs
           mountPath: /sys/fs/bpf
+        - name: cilium-cgroup
+          mountPath: /run/cilium/cgroupv2
       volumes:
         - name: bpffs
           hostPath:
             path: /sys/fs/bpf
             type: Directory
+        - name: cilium-cgroup
+          hostPath:
+            path: /run/cilium/cgroupv2
 ---
 apiVersion: v1
 kind: ServiceAccount

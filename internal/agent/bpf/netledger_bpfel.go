@@ -13,22 +13,23 @@ import (
 	"github.com/cilium/ebpf"
 )
 
-type NetLedgerConnVal struct {
-	_                structs.HostLayout
-	CgroupId         uint64
-	SrcIp            uint32
-	DstIp            uint32
-	SrcPort          uint16
-	DstPort          uint16
-	Proto            uint8
-	ConnDirection    uint8
-	_                [2]byte
-	TxBytes          uint64
-	RxBytes          uint64
-	HaveSrc          uint8
-	HaveDst          uint8
-	ConnectionClosed uint8
-	_                [5]byte
+type NetLedgerConnMeta struct {
+	_        structs.HostLayout
+	CgroupId uint64
+}
+
+type NetLedgerConnStats struct {
+	_             structs.HostLayout
+	CgroupId      uint64
+	TxBytes       uint64
+	RxBytes       uint64
+	SrcIp4        uint32
+	DstIp4        uint32
+	SrcPort       uint16
+	DstPort       uint16
+	Proto         uint8
+	ConnDirection uint8
+	_             [2]byte
 }
 
 // LoadNetLedger returns the embedded CollectionSpec for NetLedger.
@@ -73,8 +74,6 @@ type NetLedgerSpecs struct {
 //
 // It can be passed ebpf.CollectionSpec.Assign.
 type NetLedgerProgramSpecs struct {
-	CgBind4    *ebpf.ProgramSpec `ebpf:"cg_bind4"`
-	CgConnect4 *ebpf.ProgramSpec `ebpf:"cg_connect4"`
 	CgEgress   *ebpf.ProgramSpec `ebpf:"cg_egress"`
 	CgIngress  *ebpf.ProgramSpec `ebpf:"cg_ingress"`
 	TcpSockops *ebpf.ProgramSpec `ebpf:"tcp_sockops"`
@@ -84,7 +83,8 @@ type NetLedgerProgramSpecs struct {
 //
 // It can be passed ebpf.CollectionSpec.Assign.
 type NetLedgerMapSpecs struct {
-	ConnMap *ebpf.MapSpec `ebpf:"conn_map"`
+	ConnMeta  *ebpf.MapSpec `ebpf:"conn_meta"`
+	ConnStats *ebpf.MapSpec `ebpf:"conn_stats"`
 }
 
 // NetLedgerVariableSpecs contains global variables before they are loaded into the kernel.
@@ -113,12 +113,14 @@ func (o *NetLedgerObjects) Close() error {
 //
 // It can be passed to LoadNetLedgerObjects or ebpf.CollectionSpec.LoadAndAssign.
 type NetLedgerMaps struct {
-	ConnMap *ebpf.Map `ebpf:"conn_map"`
+	ConnMeta  *ebpf.Map `ebpf:"conn_meta"`
+	ConnStats *ebpf.Map `ebpf:"conn_stats"`
 }
 
 func (m *NetLedgerMaps) Close() error {
 	return _NetLedgerClose(
-		m.ConnMap,
+		m.ConnMeta,
+		m.ConnStats,
 	)
 }
 
@@ -132,8 +134,6 @@ type NetLedgerVariables struct {
 //
 // It can be passed to LoadNetLedgerObjects or ebpf.CollectionSpec.LoadAndAssign.
 type NetLedgerPrograms struct {
-	CgBind4    *ebpf.Program `ebpf:"cg_bind4"`
-	CgConnect4 *ebpf.Program `ebpf:"cg_connect4"`
 	CgEgress   *ebpf.Program `ebpf:"cg_egress"`
 	CgIngress  *ebpf.Program `ebpf:"cg_ingress"`
 	TcpSockops *ebpf.Program `ebpf:"tcp_sockops"`
@@ -141,8 +141,6 @@ type NetLedgerPrograms struct {
 
 func (p *NetLedgerPrograms) Close() error {
 	return _NetLedgerClose(
-		p.CgBind4,
-		p.CgConnect4,
 		p.CgEgress,
 		p.CgIngress,
 		p.TcpSockops,

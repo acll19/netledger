@@ -20,7 +20,7 @@ func main() {
 	flag.Parse()
 	log.SetupLogger(logLevel)
 
-	fi := 1 * time.Minute // TODO: consider making this configurable
+	fi := 5 * time.Second // TODO: consider making this configurable
 	startupTime := time.Now().Unix()
 	agent := agent.NewAgent(node, server, startupTime, fi)
 	objs, links, err := agent.LoadEBPF()
@@ -38,7 +38,7 @@ func main() {
 		}
 	}()
 
-	err = agent.Start(objs)
+	err = agent.Start()
 	if err != nil {
 		slog.Error("Error starting agent", "error", err)
 		os.Exit(1)
