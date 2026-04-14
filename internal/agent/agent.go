@@ -46,25 +46,23 @@ type Agent struct {
 	objs *bpf.NetLedgerObjects
 }
 
-func NewAgent(node, server string, startupTime int64, interval time.Duration) *Agent {
+func NewAgent(c Config, startupTime int64) *Agent {
 	var httpClient = &http.Client{
-		Timeout: 5 * time.Second, // TODO: consider making this configurable
+		Timeout: c.HttpClient.Timeout,
 		Transport: &http.Transport{
 			DialContext: (&net.Dialer{
-				Timeout:   2 * time.Second,  // TODO: consider making this configurable
-				KeepAlive: 30 * time.Second, // TODO: consider making this configurable
+				KeepAliveConfig: net.KeepAliveConfig{
+					Enable: true,
+				},
 			}).DialContext,
-			TLSHandshakeTimeout:   2 * time.Second,        // TODO: consider making this configurable
-			ResponseHeaderTimeout: 3 * time.Second,        // TODO: consider making this configurable
-			ExpectContinueTimeout: 200 * time.Millisecond, // TODO: consider making this configurable
 		},
 	}
 
 	return &Agent{
-		Node:              node,
-		Server:            server,
+		Node:              c.Node,
+		Server:            c.ClassifierEndpoint,
 		StartupTime:       startupTime,
-		Interval:          interval,
+		Interval:          c.StatsPollInterval,
 		cgroupToPodCache:  make(map[uint64]*kubernetes.PodMeta),
 		podToCgroupsCache: make(map[string][]uint64),
 		podEventsCh:       make(chan podEvent, 100), // TODO: consider making this buffer size configurable
