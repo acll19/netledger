@@ -1,3 +1,5 @@
+__debug_*
+
 agent/netledger_bpfeb.o
 agent/netledger_bpfel.o
 netledger-agent
