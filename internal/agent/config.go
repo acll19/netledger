@@ -14,10 +14,12 @@ type HttpClient struct {
 }
 
 type Config struct {
-	ClassifierEndpoint string        `yaml:"classifierEndpoint"`
-	Node               string        `yaml:"node"`
-	StatsPollInterval  time.Duration `yaml:"statsPollInternval"`
-	HttpClient         HttpClient    `yaml:"httpClient"`
+	ClassifierEndpoint            string        `yaml:"classifierEndpoint"`
+	Node                          string        `yaml:"node"`
+	StatsPollInterval             time.Duration `yaml:"statsPollInternval"`
+	HttpClient                    HttpClient    `yaml:"httpClient"`
+	MaxPodEventsAtOnce            int           `yaml:"maxPodEventsAtOnce"`
+	StaleConnCleanupIntervalInSec int           `yaml:"staleConnectionsCleanupIntervalInSec"`
 }
 
 func LoadConfig(path string) (Config, error) {

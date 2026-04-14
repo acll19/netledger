@@ -31,6 +31,7 @@ func main() {
 	}
 
 	config := loadConfig()
+	config.StatsPollInterval = pi
 	if server != "" {
 		config.ClassifierEndpoint = server
 	}
@@ -45,12 +46,17 @@ func main() {
 		slog.Error("no node name provided")
 		os.Exit(2)
 	}
-	config.StatsPollInterval = pi
 	if config.HttpClient.Timeout == 0*time.Second {
 		config.HttpClient.Timeout = 5 * time.Second
 	}
-	startupTime := time.Now().Unix()
+	if config.MaxPodEventsAtOnce == 0 {
+		config.MaxPodEventsAtOnce = 100
+	}
+	if config.StaleConnCleanupIntervalInSec == 0 {
+		config.StaleConnCleanupIntervalInSec = 60
+	}
 
+	startupTime := time.Now().Unix()
 	agent := agent.NewAgent(config, startupTime)
 	objs, links, err := agent.LoadEBPF()
 	if err != nil {

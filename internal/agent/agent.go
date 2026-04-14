@@ -33,15 +33,16 @@ type podEvent struct {
 }
 
 type Agent struct {
-	Node              string
-	Server            string
-	StartupTime       int64
-	Interval          time.Duration
-	cgroupToPodCache  map[uint64]*kubernetes.PodMeta
-	podToCgroupsCache map[string][]uint64 // map of pod UID to slice of cgroup IDs for handling pod deletions
-	podEventsCh       chan podEvent
-	httpClient        *http.Client
-	mLock             *sync.RWMutex
+	Node                          string
+	Server                        string
+	StartupTime                   int64
+	Interval                      time.Duration
+	cgroupToPodCache              map[uint64]*kubernetes.PodMeta
+	podToCgroupsCache             map[string][]uint64 // map of pod UID to slice of cgroup IDs for handling pod deletions
+	podEventsCh                   chan podEvent
+	staleConnCleanUpIntervalInSec int
+	httpClient                    *http.Client
+	mLock                         *sync.RWMutex
 
 	objs *bpf.NetLedgerObjects
 }
@@ -59,15 +60,16 @@ func NewAgent(c Config, startupTime int64) *Agent {
 	}
 
 	return &Agent{
-		Node:              c.Node,
-		Server:            c.ClassifierEndpoint,
-		StartupTime:       startupTime,
-		Interval:          c.StatsPollInterval,
-		cgroupToPodCache:  make(map[uint64]*kubernetes.PodMeta),
-		podToCgroupsCache: make(map[string][]uint64),
-		podEventsCh:       make(chan podEvent, 100), // TODO: consider making this buffer size configurable
-		httpClient:        httpClient,
-		mLock:             &sync.RWMutex{},
+		Node:                          c.Node,
+		Server:                        c.ClassifierEndpoint,
+		StartupTime:                   startupTime,
+		Interval:                      c.StatsPollInterval,
+		cgroupToPodCache:              make(map[uint64]*kubernetes.PodMeta),
+		podToCgroupsCache:             make(map[string][]uint64),
+		podEventsCh:                   make(chan podEvent, c.MaxPodEventsAtOnce),
+		staleConnCleanUpIntervalInSec: c.StaleConnCleanupIntervalInSec,
+		httpClient:                    httpClient,
+		mLock:                         &sync.RWMutex{},
 	}
 }
 
@@ -332,7 +334,8 @@ func (a *Agent) onPodUpdate(oldObj, newObj any) {
 }
 
 func (a *Agent) cleanUpStaleConnections(ctx context.Context) {
-	ticker := time.NewTicker(1 * time.Minute) // TODO: consider making this interval configurable
+	i := time.Duration(a.staleConnCleanUpIntervalInSec) * time.Second
+	ticker := time.NewTicker(i * time.Minute)
 	defer ticker.Stop()
 	size := a.objs.ConnMeta.MaxEntries()
 	mKeys := make([]uint64, size)
