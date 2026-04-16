@@ -14,7 +14,7 @@ import (
 
 func AttachRootCgroup(prg *ebpf.Program, attachType ebpf.AttachType) (link.Link, error) {
 	cgroupIngressLink, err := link.AttachCgroup(link.CgroupOptions{
-		Path:    "/run/cilium/cgroupv2", // "/sys/fs/cgroup",
+		Path:    "/sys/fs/cgroup",
 		Attach:  attachType,
 		Program: prg,
 	})

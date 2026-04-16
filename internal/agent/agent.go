@@ -229,7 +229,8 @@ func (a *Agent) Start() error {
 				srcAddr := fmt.Sprintf("%s:%d", srcIp.To4().String(), sport)
 				dstAddr := fmt.Sprintf("%s:%d", dstIp.To4().String(), dport)
 
-				slog.Debug(fmt.Sprintf("[Direction %d] %s -> %s: %d tx bytes, %d rx bytes (srcPod: %s/%s, dstPod: %s/%s)",
+				slog.Debug(fmt.Sprintf("[Direction %d|Pod Initiated %d] %s -> %s: %d tx bytes, %d rx bytes (srcPod: %s/%s, dstPod: %s/%s)",
+					stats[i].PodInitiated,
 					stats[i].ConnDirection,
 					srcAddr,
 					dstAddr,
@@ -242,7 +243,8 @@ func (a *Agent) Start() error {
 				))
 
 				entry := payload.FlowEntry{
-					Direction:       int(stats[i].ConnDirection),
+					PodInitiated:    stats[i].PodInitiated,
+					Direction:       stats[i].ConnDirection,
 					SrcIP:           srcIp.To4().String(),
 					SrcPort:         sport,
 					DstIP:           dstIp.To4().String(),

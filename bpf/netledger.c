@@ -57,11 +57,18 @@ struct conn_stats
       0 EGRESS, 1 INGRESS
     */
     __u8 conn_direction;
+    /*
+        Whether or not the pod initated this request
+        We duplicate here to avoid having to read this from meta in user space
+    */
+    __u8 pod_initiated;
 };
 
 struct conn_meta
 {
     __u64 cgroup_id;
+    /* use to populate same field in stats for active connections */
+    __u8 pod_initiated;
 };
 
 struct
@@ -235,12 +242,14 @@ int cg_ingress(struct __sk_buff *skb)
                 .dst_port = pkt.dst_port,
                 .proto = pkt.proto,
                 .conn_direction = INGRESS,
+                .pod_initiated = 0,
                 .rx_bytes = skb->len,
             };
             bpf_map_update_elem(&conn_stats, &cookie, &new_stats, BPF_ANY);
 
             struct conn_meta new_meta = {
                 .cgroup_id = cgroup_id,
+                .pod_initiated = 0,
             };
             bpf_map_update_elem(&conn_meta, &cookie, &new_meta, BPF_ANY);
 
@@ -258,6 +267,7 @@ int cg_ingress(struct __sk_buff *skb)
                     .dst_port = pkt.dst_port,
                     .proto = pkt.proto,
                     .conn_direction = INGRESS,
+                    .pod_initiated = meta->pod_initiated,
                     .rx_bytes = skb->len,
                 };
                 bpf_map_update_elem(&conn_stats, &cookie, &new_stats, BPF_ANY);
@@ -278,6 +288,7 @@ int cg_ingress(struct __sk_buff *skb)
                 .dst_port = pkt.dst_port,
                 .proto = pkt.proto,
                 .conn_direction = INGRESS,
+                .pod_initiated = meta->pod_initiated,
                 .rx_bytes = skb->len,
             };
             bpf_map_update_elem(&conn_stats, &cookie, &new_stats, BPF_ANY);
@@ -306,6 +317,7 @@ int cg_ingress(struct __sk_buff *skb)
                 .dst_port = pkt.dst_port,
                 .proto = pkt.proto,
                 .conn_direction = INGRESS,
+                .pod_initiated = 0, /* limitation: not possible to know state  */
                 .rx_bytes = skb->len,
             };
             bpf_map_update_elem(&conn_stats, &cookie, &new_stats, BPF_ANY);
@@ -362,12 +374,14 @@ int cg_egress(struct __sk_buff *skb)
                 .dst_port = pkt.dst_port,
                 .proto = pkt.proto,
                 .conn_direction = EGRESS,
+                .pod_initiated = 1,
                 .tx_bytes = skb->len,
             };
             bpf_map_update_elem(&conn_stats, &cookie, &new_stats, BPF_ANY);
 
             struct conn_meta new_meta = {
                 .cgroup_id = cgroup_id,
+                .pod_initiated = 1,
             };
             bpf_map_update_elem(&conn_meta, &cookie, &new_meta, BPF_ANY);
 
@@ -385,6 +399,7 @@ int cg_egress(struct __sk_buff *skb)
                     .dst_port = pkt.dst_port,
                     .proto = pkt.proto,
                     .conn_direction = EGRESS,
+                    .pod_initiated = meta->pod_initiated,
                     .tx_bytes = skb->len,
                 };
                 bpf_map_update_elem(&conn_stats, &cookie, &new_stats, BPF_ANY);
@@ -406,6 +421,7 @@ int cg_egress(struct __sk_buff *skb)
                 .dst_port = pkt.dst_port,
                 .proto = pkt.proto,
                 .conn_direction = EGRESS,
+                .pod_initiated = meta->pod_initiated,
                 .tx_bytes = skb->len,
             };
             bpf_map_update_elem(&conn_stats, &cookie, &new_stats, BPF_ANY);
@@ -434,6 +450,7 @@ int cg_egress(struct __sk_buff *skb)
                 .dst_port = pkt.dst_port,
                 .proto = pkt.proto,
                 .conn_direction = EGRESS,
+                .pod_initiated = 1, /* limitation: what if this is a response packet actually? */
                 .tx_bytes = skb->len,
             };
             bpf_map_update_elem(&conn_stats, &cookie, &new_stats, BPF_ANY);

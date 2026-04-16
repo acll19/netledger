@@ -33,9 +33,10 @@ type FlowEntry struct {
 	DstPort         uint16 `json:"dstPort"`
 	TxBytes         uint64 `json:"txBytes"`
 	RxBytes         uint64 `json:"rxBytes"`
-	Direction       int    `json:"direction"`
+	Direction       uint8  `json:"direction"`
 	SrcPodName      string `json:"srcPodName"`
 	SrcPodNamespace string `json:"srcPodNamespace"`
 	DstPodName      string `json:"dstPodName"`
 	DstPodNamespace string `json:"dstPodNamespace"`
+	PodInitiated    uint8  `json:"podInitiated"`
 }

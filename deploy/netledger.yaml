@@ -35,6 +35,21 @@ subjects:
   name: netledger-agent
   namespace: netledger
 ---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: netledger-agent-config
+  namespace: netledger
+data:
+  config.yaml: |
+    node: netledger-cilium-worder2
+    statsPollInternval: 5s
+    httpClient:
+      timeout: 5s
+      keepAlive: true
+    maxPodEventsAtOnce: 100
+    staleConnectionsCleanupIntervalInSec: 60
+---
 apiVersion: apps/v1
 kind: DaemonSet
 metadata:
@@ -84,6 +99,9 @@ spec:
           mountPath: /sys/fs/bpf
         - name: cilium-cgroup
           mountPath: /run/cilium/cgroupv2
+        - name: config-volume
+          mountPath: .config/config.yaml
+          subPath: config.yaml
       volumes:
         - name: bpffs
           hostPath:
@@ -92,6 +110,13 @@ spec:
         - name: cilium-cgroup
           hostPath:
             path: /run/cilium/cgroupv2
+        - name: config-volume
+          configMap:
+            name: netledger-agent-config
+            items:
+            - key: config.yaml
+              path: config.yaml
+          
 ---
 apiVersion: v1
 kind: ServiceAccount

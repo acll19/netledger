@@ -12,7 +12,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func createFlowEntry(srcIP, dstIP string, srcPort, dstPort uint16, direction int, txBytes, rxBytes uint64) payload.FlowEntry {
+func createFlowEntry(srcIP, dstIP string, srcPort, dstPort uint16, direction uint8, txBytes, rxBytes uint64) payload.FlowEntry {
 	return payload.FlowEntry{
 		SrcIP:     srcIP,
 		DstIP:     dstIP,
@@ -24,7 +24,7 @@ func createFlowEntry(srcIP, dstIP string, srcPort, dstPort uint16, direction int
 	}
 }
 
-func createFlowEntryWithPods(srcIP, dstIP string, srcPort, dstPort uint16, direction int, txBytes, rxBytes uint64,
+func createFlowEntryWithPods(srcIP, dstIP string, srcPort, dstPort uint16, direction uint8, txBytes, rxBytes uint64,
 	srcPodName, srcPodNamespace, dstPodName, dstPodNamespace string) payload.FlowEntry {
 	entry := createFlowEntry(srcIP, dstIP, srcPort, dstPort, direction, txBytes, rxBytes)
 	entry.SrcPodName = srcPodName

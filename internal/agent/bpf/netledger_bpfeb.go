@@ -14,8 +14,10 @@ import (
 )
 
 type NetLedgerConnMeta struct {
-	_        structs.HostLayout
-	CgroupId uint64
+	_            structs.HostLayout
+	CgroupId     uint64
+	PodInitiated uint8
+	_            [7]byte
 }
 
 type NetLedgerConnStats struct {
@@ -29,7 +31,8 @@ type NetLedgerConnStats struct {
 	DstPort       uint16
 	Proto         uint8
 	ConnDirection uint8
-	_             [2]byte
+	PodInitiated  uint8
+	_             [1]byte
 }
 
 // LoadNetLedger returns the embedded CollectionSpec for NetLedger.

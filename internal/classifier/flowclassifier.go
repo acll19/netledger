@@ -24,14 +24,15 @@ type NodeInfo struct {
 }
 
 type FlowLog struct {
-	Src       string
-	SrcIP     netip.Addr
-	SrcPort   int
-	Dst       string
-	DstIP     netip.Addr
-	DstPort   int
-	Direction int
-	Bytes     uint64
+	Src          string
+	SrcIP        netip.Addr
+	SrcPort      int
+	Dst          string
+	DstIP        netip.Addr
+	DstPort      int
+	Direction    int
+	Bytes        uint64
+	PodInitiated int
 }
 
 type ClassifyOptions struct {
@@ -72,6 +73,11 @@ func Classify(data payload.Flow, opts ClassifyOptions) []FlowLog {
 		dstParsed, _ = netip.ParseAddr(dstIp)
 
 		flowKey := metrics.FlowKey{}
+		flowKey.PodInitiated = true
+		if entry.PodInitiated == 0 {
+			flowKey.PodInitiated = false
+		}
+
 		switch entry.Direction {
 		case network.Egress:
 			classified := doClassify(dstIp, srcRegion, srcZone, &flowKey, opts.Config)
@@ -84,7 +90,6 @@ func Classify(data payload.Flow, opts ClassifyOptions) []FlowLog {
 
 			flowKey.PodName = srcPod.Name
 			flowKey.Namespace = srcPod.Namespace
-			flowKey.PodInitiated = true
 
 			opts.Mutex.Lock()
 			currentFlow := opts.EgStatistics[flowKey]
@@ -123,14 +128,15 @@ func Classify(data payload.Flow, opts ClassifyOptions) []FlowLog {
 		}
 
 		flowLogs = append(flowLogs, FlowLog{
-			Src:       fmt.Sprintf("%s/%s", srcPod.Namespace, srcPod.Name),
-			SrcIP:     srcParsed,
-			SrcPort:   int(entry.SrcPort),
-			Dst:       fmt.Sprintf("%s/%s", dstPod.Namespace, dstPod.Name),
-			DstIP:     dstParsed,
-			DstPort:   int(entry.DstPort),
-			Direction: entry.Direction,
-			Bytes:     entry.TxBytes + entry.RxBytes,
+			Src:          fmt.Sprintf("%s/%s", srcPod.Namespace, srcPod.Name),
+			SrcIP:        srcParsed,
+			SrcPort:      int(entry.SrcPort),
+			Dst:          fmt.Sprintf("%s/%s", dstPod.Namespace, dstPod.Name),
+			DstIP:        dstParsed,
+			DstPort:      int(entry.DstPort),
+			Direction:    int(entry.Direction),
+			PodInitiated: int(entry.PodInitiated),
+			Bytes:        entry.TxBytes + entry.RxBytes,
 		})
 	}
 	return flowLogs
