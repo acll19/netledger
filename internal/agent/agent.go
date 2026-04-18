@@ -122,6 +122,13 @@ func (a *Agent) LoadEBPF() (*bpf.NetLedgerObjects, []link.Link, error) {
 		return nil, nil, fmt.Errorf("attach cgroup skb: %w", err)
 	}
 	activeLinks = append(activeLinks, cgroupSockopsLink)
+
+	cgroupConnect4Link, err := bpf.AttachRootCgroup(objs.CgConnect4, ebpf.AttachCGroupInet4Connect)
+	if err != nil {
+		return nil, nil, fmt.Errorf("attach cgroup skb: %w", err)
+	}
+	activeLinks = append(activeLinks, cgroupConnect4Link)
+
 	slog.Info("Number of active links", "count", len(activeLinks))
 
 	return &objs, activeLinks, nil

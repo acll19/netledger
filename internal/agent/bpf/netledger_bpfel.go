@@ -77,6 +77,7 @@ type NetLedgerSpecs struct {
 //
 // It can be passed ebpf.CollectionSpec.Assign.
 type NetLedgerProgramSpecs struct {
+	CgConnect4 *ebpf.ProgramSpec `ebpf:"cg_connect4"`
 	CgEgress   *ebpf.ProgramSpec `ebpf:"cg_egress"`
 	CgIngress  *ebpf.ProgramSpec `ebpf:"cg_ingress"`
 	TcpSockops *ebpf.ProgramSpec `ebpf:"tcp_sockops"`
@@ -137,6 +138,7 @@ type NetLedgerVariables struct {
 //
 // It can be passed to LoadNetLedgerObjects or ebpf.CollectionSpec.LoadAndAssign.
 type NetLedgerPrograms struct {
+	CgConnect4 *ebpf.Program `ebpf:"cg_connect4"`
 	CgEgress   *ebpf.Program `ebpf:"cg_egress"`
 	CgIngress  *ebpf.Program `ebpf:"cg_ingress"`
 	TcpSockops *ebpf.Program `ebpf:"tcp_sockops"`
@@ -144,6 +146,7 @@ type NetLedgerPrograms struct {
 
 func (p *NetLedgerPrograms) Close() error {
 	return _NetLedgerClose(
+		p.CgConnect4,
 		p.CgEgress,
 		p.CgIngress,
 		p.TcpSockops,

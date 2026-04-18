@@ -32,6 +32,9 @@ char __license[] SEC("license") = "Dual MIT/GPL";
 #define IS_TCP_RST 2
 #define IS_TCP_FIN 3
 
+#define CONN_POD_INITIATED 1
+#define CONN_EXT_INITIATED 0
+
 struct conn_tuple
 {
     __u32 src_ip;
@@ -200,6 +203,25 @@ int tcp_sockops(struct bpf_sock_ops *skops)
     return 1;
 }
 
+SEC("cgroup/connect4")
+int cg_connect4(struct bpf_sock_addr *ctx)
+{
+    __u64 cookie = bpf_get_socket_cookie(ctx);
+    struct conn_meta *meta = bpf_map_lookup_elem(&conn_meta, &cookie);
+
+    if (!meta)
+    {
+        __u64 cgroup_id = bpf_get_current_cgroup_id();
+        struct conn_meta new_meta =
+            {
+                .cgroup_id = cgroup_id,
+                .pod_initiated = CONN_POD_INITIATED,
+            };
+        bpf_map_update_elem(&conn_meta, &cookie, &new_meta, BPF_ANY);
+    }
+    return 1;
+}
+
 /* ============================================================
  * ingress skb — RX accounting + external TCP detection
  * ============================================================ */
@@ -221,46 +243,15 @@ int cg_ingress(struct __sk_buff *skb)
 
     struct conn_stats *stats = bpf_map_lookup_elem(&conn_stats, &cookie);
     struct conn_meta *meta = bpf_map_lookup_elem(&conn_meta, &cookie);
-    __u64 cgroup_id = bpf_get_current_cgroup_id();
 
     if (pkt.proto == IPPROTO_TCP)
     {
-        /*
-            - SYN received: initialize stats and meta, add up pkt->len, add to the maps and return
-            - meta found but no stats: this is an active connection whose delta has been recently read by user space.
-                Recreate stats, add up pkt->len and add to conn_stats map.
-            - meta found with stats: just add up pkt->len to stats and return.
-            - RST or FIN received: add up pkt->len to stats and delete meta from conn_meta and return.
-        */
-        if (tcp_state == IS_TCP_FST_PKT_SYN)
-        {
-            struct conn_stats new_stats = {
-                .cgroup_id = cgroup_id,
-                .src_ip4 = pkt.src_ip,
-                .dst_ip4 = pkt.dst_ip,
-                .src_port = pkt.src_port,
-                .dst_port = pkt.dst_port,
-                .proto = pkt.proto,
-                .conn_direction = INGRESS,
-                .pod_initiated = 0,
-                .rx_bytes = skb->len,
-            };
-            bpf_map_update_elem(&conn_stats, &cookie, &new_stats, BPF_ANY);
-
-            struct conn_meta new_meta = {
-                .cgroup_id = cgroup_id,
-                .pod_initiated = 0,
-            };
-            bpf_map_update_elem(&conn_meta, &cookie, &new_meta, BPF_ANY);
-
-            return 1;
-        }
-        else if (tcp_state == IS_TCP_RST || tcp_state == IS_TCP_FIN)
+        if (tcp_state == IS_TCP_RST || tcp_state == IS_TCP_FIN)
         {
             if (meta && !stats)
             {
                 struct conn_stats new_stats = {
-                    .cgroup_id = cgroup_id,
+                    .cgroup_id = meta->cgroup_id,
                     .src_ip4 = pkt.src_ip,
                     .dst_ip4 = pkt.dst_ip,
                     .src_port = pkt.src_port,
@@ -281,7 +272,7 @@ int cg_ingress(struct __sk_buff *skb)
         else if (meta && !stats)
         {
             struct conn_stats new_stats = {
-                .cgroup_id = cgroup_id,
+                .cgroup_id = meta->cgroup_id,
                 .src_ip4 = pkt.src_ip,
                 .dst_ip4 = pkt.dst_ip,
                 .src_port = pkt.src_port,
@@ -309,6 +300,7 @@ int cg_ingress(struct __sk_buff *skb)
         // We do not care about connection state, so we just count bytes in stats
         if (!stats)
         {
+            __u64 cgroup_id = bpf_get_current_cgroup_id();
             struct conn_stats new_stats = {
                 .cgroup_id = cgroup_id,
                 .src_ip4 = pkt.src_ip,
@@ -317,7 +309,7 @@ int cg_ingress(struct __sk_buff *skb)
                 .dst_port = pkt.dst_port,
                 .proto = pkt.proto,
                 .conn_direction = INGRESS,
-                .pod_initiated = 0, /* limitation: not possible to know state  */
+                .pod_initiated = CONN_EXT_INITIATED, /* limitation: not possible to know state  */
                 .rx_bytes = skb->len,
             };
             bpf_map_update_elem(&conn_stats, &cookie, &new_stats, BPF_ANY);
@@ -353,46 +345,15 @@ int cg_egress(struct __sk_buff *skb)
 
     struct conn_stats *stats = bpf_map_lookup_elem(&conn_stats, &cookie);
     struct conn_meta *meta = bpf_map_lookup_elem(&conn_meta, &cookie);
-    __u64 cgroup_id = bpf_get_current_cgroup_id();
 
     if (pkt.proto == IPPROTO_TCP)
     {
-        /*
-            - SYN received: initialize meta and stats, add up pkt len, add to the maps and return.
-            - meta found but no stats: This is an active connection whose delta has been recently read by user space.
-                Recreate stats, add up pkt len and add to conn_stats map.
-            - meta and stats found: add up pkt len to stats and return.
-            - RST or FIN received: add up pkt len to stats and delete meta from conn_meta and return.
-        */
-        if (tcp_state == IS_TCP_FST_PKT_SYN)
-        {
-            struct conn_stats new_stats = {
-                .cgroup_id = cgroup_id,
-                .src_ip4 = pkt.src_ip,
-                .dst_ip4 = pkt.dst_ip,
-                .src_port = pkt.src_port,
-                .dst_port = pkt.dst_port,
-                .proto = pkt.proto,
-                .conn_direction = EGRESS,
-                .pod_initiated = 1,
-                .tx_bytes = skb->len,
-            };
-            bpf_map_update_elem(&conn_stats, &cookie, &new_stats, BPF_ANY);
-
-            struct conn_meta new_meta = {
-                .cgroup_id = cgroup_id,
-                .pod_initiated = 1,
-            };
-            bpf_map_update_elem(&conn_meta, &cookie, &new_meta, BPF_ANY);
-
-            return 1;
-        }
-        else if (tcp_state == IS_TCP_RST || tcp_state == IS_TCP_FIN)
+        if (tcp_state == IS_TCP_RST || tcp_state == IS_TCP_FIN)
         {
             if (meta && !stats)
             {
                 struct conn_stats new_stats = {
-                    .cgroup_id = cgroup_id,
+                    .cgroup_id = meta->cgroup_id,
                     .src_ip4 = pkt.src_ip,
                     .dst_ip4 = pkt.dst_ip,
                     .src_port = pkt.src_port,
@@ -414,7 +375,7 @@ int cg_egress(struct __sk_buff *skb)
         else if (meta && !stats)
         {
             struct conn_stats new_stats = {
-                .cgroup_id = cgroup_id,
+                .cgroup_id = meta->cgroup_id,
                 .src_ip4 = pkt.src_ip,
                 .dst_ip4 = pkt.dst_ip,
                 .src_port = pkt.src_port,
@@ -442,6 +403,7 @@ int cg_egress(struct __sk_buff *skb)
         // We do not care about connection state, so we just count bytes in stats
         if (!stats)
         {
+            __u64 cgroup_id = bpf_get_current_cgroup_id();
             struct conn_stats new_stats = {
                 .cgroup_id = cgroup_id,
                 .src_ip4 = pkt.src_ip,
@@ -450,7 +412,7 @@ int cg_egress(struct __sk_buff *skb)
                 .dst_port = pkt.dst_port,
                 .proto = pkt.proto,
                 .conn_direction = EGRESS,
-                .pod_initiated = 1, /* limitation: what if this is a response packet actually? */
+                .pod_initiated = CONN_POD_INITIATED, /* limitation: what if this is a response packet actually? */
                 .tx_bytes = skb->len,
             };
             bpf_map_update_elem(&conn_stats, &cookie, &new_stats, BPF_ANY);
