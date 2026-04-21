@@ -147,9 +147,7 @@ parse_ipv4_tuple(struct __sk_buff *skb,
 
         pkt->src_port = bpf_ntohs(th->source);
         pkt->dst_port = bpf_ntohs(th->dest);
-        if (th->syn && !th->ack)
-            *tcp_state = IS_TCP_FST_PKT_SYN;
-        else if (th->rst)
+        if (th->rst)
             *tcp_state = IS_TCP_RST;
         else if (th->fin)
             *tcp_state = IS_TCP_FIN;
@@ -207,6 +205,9 @@ int tcp_sockops(struct bpf_sock_ops *skops)
     return 1;
 }
 
+/* ============================================================
+connect4 tells us if the process initiated the connection
+============================================================ */
 SEC("cgroup/connect4")
 int cg_connect4(struct bpf_sock_addr *ctx)
 {
