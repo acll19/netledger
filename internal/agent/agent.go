@@ -362,17 +362,17 @@ func (a *Agent) cleanUpStaleConnections(ctx context.Context) {
 			cursor := new(ebpf.MapBatchCursor)
 			n, err := a.objs.ConnMeta.BatchLookup(cursor, mKeys, mValues, opts)
 			if err != nil && !errors.Is(err, ebpf.ErrKeyNotExist) {
-				slog.Error("failed to read data for stale connection cleanup", "message", err.Error())
+				slog.Error("failed to read from conn_meta", "message", err.Error())
 				continue
 			}
 
 			if n <= 0 {
-				slog.Debug("no data for stale connection cleanup, skipping")
+				slog.Debug("no data in conn_meta, skipping")
 				continue
 			}
 
 			if err != nil && !errors.Is(err, ebpf.ErrKeyNotExist) {
-				slog.Error("failed to read data for stale connection cleanup", "message", err.Error())
+				slog.Error("failed to read from conn_meta", "message", err.Error())
 				continue
 			}
 
@@ -388,9 +388,9 @@ func (a *Agent) cleanUpStaleConnections(ctx context.Context) {
 			}
 
 			if len(staledConns) > 0 {
-				slog.Info("Cleaning up stale connections", "count", len(staledConns))
+				slog.Info("Cleaning up connections from conn_meta", "count", len(staledConns))
 				if _, err := a.objs.ConnMeta.BatchDelete(staledConns, nil); err != nil {
-					slog.Error("failed to delete stale connections", "message", err.Error())
+					slog.Error("failed to delete from conn_meta", "message", err.Error())
 				}
 			}
 		}

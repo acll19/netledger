@@ -16,6 +16,7 @@ import (
 type NetLedgerConnMeta struct {
 	_            structs.HostLayout
 	CgroupId     uint64
+	LastSeen     uint64
 	PodInitiated uint8
 	_            [7]byte
 }

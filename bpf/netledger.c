@@ -28,9 +28,8 @@ char __license[] SEC("license") = "Dual MIT/GPL";
 #define EGRESS 0
 #define INGRESS 1
 
-#define IS_TCP_FST_PKT_SYN 1
-#define IS_TCP_RST 2
-#define IS_TCP_FIN 3
+#define IS_TCP_RST 1
+#define IS_TCP_FIN 2
 
 #define CONN_POD_INITIATED 1
 #define CONN_EXT_INITIATED 0
@@ -70,6 +69,11 @@ struct conn_stats
 struct conn_meta
 {
     __u64 cgroup_id;
+    /* is updated every time a packet of this connection is seen
+       useful for LRU logic where hot connections are less likely to be evicted.
+       also opens the doors to introduce TTL eviction if needed.
+     */
+    __u64 last_seen;
     /* use to populate same field in stats for active connections */
     __u8 pod_initiated;
 };
@@ -216,6 +220,7 @@ int cg_connect4(struct bpf_sock_addr *ctx)
             {
                 .cgroup_id = cgroup_id,
                 .pod_initiated = CONN_POD_INITIATED,
+                .last_seen = bpf_ktime_get_ns(),
             };
         bpf_map_update_elem(&conn_meta, &cookie, &new_meta, BPF_ANY);
     }
@@ -250,6 +255,9 @@ int cg_ingress(struct __sk_buff *skb)
         {
             if (meta && !stats)
             {
+                meta->last_seen = bpf_ktime_get_ns();
+                bpf_map_update_elem(&conn_meta, &cookie, meta, BPF_EXIST);
+
                 struct conn_stats new_stats = {
                     .cgroup_id = meta->cgroup_id,
                     .src_ip4 = pkt.src_ip,
@@ -271,6 +279,9 @@ int cg_ingress(struct __sk_buff *skb)
         }
         else if (meta && !stats)
         {
+            meta->last_seen = bpf_ktime_get_ns();
+            bpf_map_update_elem(&conn_meta, &cookie, meta, BPF_EXIST);
+
             struct conn_stats new_stats = {
                 .cgroup_id = meta->cgroup_id,
                 .src_ip4 = pkt.src_ip,
@@ -297,7 +308,8 @@ int cg_ingress(struct __sk_buff *skb)
 
     if (pkt.proto == IPPROTO_UDP)
     {
-        // We do not care about connection state, so we just count bytes in stats
+        // currently not possible to know which if pod initiated.
+        // maybe based on first packet seen?
         if (!stats)
         {
             __u64 cgroup_id = bpf_get_current_cgroup_id();
@@ -309,15 +321,13 @@ int cg_ingress(struct __sk_buff *skb)
                 .dst_port = pkt.dst_port,
                 .proto = pkt.proto,
                 .conn_direction = INGRESS,
-                .pod_initiated = CONN_EXT_INITIATED, /* limitation: not possible to know state  */
+                .pod_initiated = CONN_EXT_INITIATED,
                 .rx_bytes = skb->len,
             };
             bpf_map_update_elem(&conn_stats, &cookie, &new_stats, BPF_ANY);
         }
         else if (stats)
-        {
             __sync_fetch_and_add(&stats->rx_bytes, skb->len);
-        }
         return 1;
     }
 
@@ -352,6 +362,9 @@ int cg_egress(struct __sk_buff *skb)
         {
             if (meta && !stats)
             {
+                meta->last_seen = bpf_ktime_get_ns();
+                bpf_map_update_elem(&conn_meta, &cookie, meta, BPF_EXIST);
+
                 struct conn_stats new_stats = {
                     .cgroup_id = meta->cgroup_id,
                     .src_ip4 = pkt.src_ip,
@@ -374,6 +387,9 @@ int cg_egress(struct __sk_buff *skb)
         }
         else if (meta && !stats)
         {
+            meta->last_seen = bpf_ktime_get_ns();
+            bpf_map_update_elem(&conn_meta, &cookie, meta, BPF_EXIST);
+
             struct conn_stats new_stats = {
                 .cgroup_id = meta->cgroup_id,
                 .src_ip4 = pkt.src_ip,
@@ -419,9 +435,7 @@ int cg_egress(struct __sk_buff *skb)
             stats = bpf_map_lookup_elem(&conn_stats, &cookie);
         }
         else if (stats)
-        {
             __sync_fetch_and_add(&stats->tx_bytes, skb->len);
-        }
         return 1;
     }
 
