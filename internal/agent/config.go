@@ -20,6 +20,7 @@ type Config struct {
 	HttpClient                    HttpClient    `yaml:"httpClient"`
 	MaxPodEventsAtOnce            int           `yaml:"maxPodEventsAtOnce"`
 	StaleConnCleanupIntervalInSec int           `yaml:"staleConnectionsCleanupIntervalInSec"`
+	ConnUnEstablishedTtlInMin     int           `yaml:"connUnestablishedTtlInMin"`
 }
 
 func LoadConfig(path string) (Config, error) {

@@ -76,6 +76,10 @@ struct conn_meta
     __u64 last_seen;
     /* use to populate same field in stats for active connections */
     __u8 pod_initiated;
+
+    /* whether or not the connection has been established
+    unestablished entries for too long may cause eviction */
+    __u8 established;
 };
 
 struct
@@ -171,8 +175,7 @@ parse_ipv4_tuple(struct __sk_buff *skb,
 }
 
 /* ==========================================
- * sock_ops - learn established TCP connections
-    + cleanup on close
+ * sock_ops - learn established TCP connections plus cleanup on close
  * ========================================== */
 SEC("sockops")
 int tcp_sockops(struct bpf_sock_ops *skops)
@@ -189,6 +192,15 @@ int tcp_sockops(struct bpf_sock_ops *skops)
 
     switch (skops->op)
     {
+    case BPF_SOCK_OPS_ACTIVE_ESTABLISHED_CB:
+    {
+        struct conn_meta *meta = bpf_map_lookup_elem(&conn_meta, &cookie);
+        if (meta)
+        {
+            meta->established = 1;
+        }
+        break;
+    }
     case BPF_SOCK_OPS_STATE_CB:
     {
         if (skops->args[1] == BPF_TCP_CLOSE)

@@ -18,7 +18,8 @@ type NetLedgerConnMeta struct {
 	CgroupId     uint64
 	LastSeen     uint64
 	PodInitiated uint8
-	_            [7]byte
+	Established  uint8
+	_            [6]byte
 }
 
 type NetLedgerConnStats struct {

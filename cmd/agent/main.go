@@ -55,6 +55,19 @@ func main() {
 	if config.StaleConnCleanupIntervalInSec == 0 {
 		config.StaleConnCleanupIntervalInSec = 60
 	}
+	if config.ConnUnEstablishedTtlInMin == 0 {
+		config.ConnUnEstablishedTtlInMin = 5
+	}
+
+	slog.Info("configuration values",
+		"StatsPollInterval", config.StatsPollInterval,
+		"ClassifierEndpoint", config.ClassifierEndpoint,
+		"Node", config.Node,
+		"HttpClient.Timeout", config.HttpClient.Timeout,
+		"MaxPodEventsAtOnce", config.MaxPodEventsAtOnce,
+		"StaleConnCleanupIntervalInSec", config.StaleConnCleanupIntervalInSec,
+		"ConnUnEstablishedTtlInMin", config.ConnUnEstablishedTtlInMin,
+	)
 
 	startupTime := time.Now().Unix()
 	agent := agent.NewAgent(config, startupTime)

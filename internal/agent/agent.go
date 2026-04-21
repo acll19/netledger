@@ -41,6 +41,7 @@ type Agent struct {
 	podToCgroupsCache             map[string][]uint64 // map of pod UID to slice of cgroup IDs for handling pod deletions
 	podEventsCh                   chan podEvent
 	staleConnCleanUpIntervalInSec int
+	connUnestablishedTtlInMin     int
 	httpClient                    *http.Client
 	mLock                         *sync.RWMutex
 
@@ -68,6 +69,7 @@ func NewAgent(c Config, startupTime int64) *Agent {
 		podToCgroupsCache:             make(map[string][]uint64),
 		podEventsCh:                   make(chan podEvent, c.MaxPodEventsAtOnce),
 		staleConnCleanUpIntervalInSec: c.StaleConnCleanupIntervalInSec,
+		connUnestablishedTtlInMin:     c.ConnUnEstablishedTtlInMin,
 		httpClient:                    httpClient,
 		mLock:                         &sync.RWMutex{},
 	}
@@ -344,7 +346,7 @@ func (a *Agent) onPodUpdate(oldObj, newObj any) {
 
 func (a *Agent) cleanUpStaleConnections(ctx context.Context) {
 	i := time.Duration(a.staleConnCleanUpIntervalInSec) * time.Second
-	ticker := time.NewTicker(i * time.Minute)
+	ticker := time.NewTicker(i)
 	defer ticker.Stop()
 	size := a.objs.ConnMeta.MaxEntries()
 	mKeys := make([]uint64, size)
@@ -381,9 +383,18 @@ func (a *Agent) cleanUpStaleConnections(ctx context.Context) {
 
 			staledConns := make([]uint64, 0, n)
 			for i := range len(mKeys) {
+				// 1. we delete the entry if its cgroup does not exists anymore
+				// 2. else, we delete the entry if it has been unestablished for TTL
 				cgroup := mValues[i].CgroupId
 				if _, exist := a.cgroupToPodCache[cgroup]; !exist {
 					staledConns = append(staledConns, mKeys[i])
+				} else if mValues[i].Established == 0 {
+					now := time.Now().UnixNano()
+					elapsed := now - int64(mValues[i].LastSeen)
+					duration := time.Duration(elapsed)
+					if int(duration.Minutes()) >= a.connUnestablishedTtlInMin {
+						staledConns = append(staledConns, mKeys[i])
+					}
 				}
 			}
 
