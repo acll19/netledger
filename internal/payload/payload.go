@@ -21,10 +21,11 @@ func Decode(data []byte) (Flow, error) {
 }
 
 type Flow struct {
-	AgentNode   string      `json:"agentNode"`
-	StartupTime int64       `json:"timestamp"`
-	Entries     []FlowEntry `json:"entries"`
-	// TODO: send here the conn_meta size so classifier can emit metrics about it
+	Entries           []FlowEntry `json:"entries"`
+	AgentNode         string      `json:"agentNode"`
+	StartupTime       int64       `json:"timestamp"`
+	EbpfMapMaxEntries uint32      `json:"ebpfMapMaxSize"`
+	EbpfMapSize       uint32      `json:"epbfMapSize"`
 }
 
 type FlowEntry struct {

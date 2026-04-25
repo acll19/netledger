@@ -44,6 +44,7 @@ type Agent struct {
 	connUnestablishedTtlInMin     int
 	httpClient                    *http.Client
 	mLock                         *sync.RWMutex
+	connMetaCurrentSize           uint32
 
 	objs *bpf.NetLedgerObjects
 }
@@ -284,9 +285,11 @@ func (a *Agent) Start() error {
 
 func (a *Agent) sendDataToServer(ctx context.Context, flowEntries []payload.FlowEntry, startupTime int64) error {
 	content := payload.Encode(payload.Flow{
-		AgentNode:   a.Node,
-		StartupTime: startupTime,
-		Entries:     flowEntries,
+		AgentNode:         a.Node,
+		StartupTime:       startupTime,
+		Entries:           flowEntries,
+		EbpfMapMaxEntries: a.objs.ConnMeta.MaxEntries(),
+		EbpfMapSize:       a.connMetaCurrentSize,
 	})
 	req, err := http.NewRequest("POST", a.Server, bytes.NewReader(content))
 	if err != nil {
@@ -378,6 +381,7 @@ func (a *Agent) cleanUpStaleConnections(ctx context.Context) {
 				continue
 			}
 
+			a.connMetaCurrentSize = uint32(n)
 			mKeys = mKeys[:n]
 			mValues = mValues[:n]
 
@@ -402,6 +406,8 @@ func (a *Agent) cleanUpStaleConnections(ctx context.Context) {
 				slog.Info("Cleaning up connections from conn_meta", "count", len(staledConns))
 				if _, err := a.objs.ConnMeta.BatchDelete(staledConns, nil); err != nil {
 					slog.Error("failed to delete from conn_meta", "message", err.Error())
+				} else {
+					a.connMetaCurrentSize -= uint32(len(staledConns))
 				}
 			}
 		}

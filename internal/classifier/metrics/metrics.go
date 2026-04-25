@@ -36,4 +36,18 @@ var (
 		[]string{"namespace", "pod_name", "pod_initiated", "internet", "same_region", "same_zone"},
 		nil,
 	)
+
+	AgentsEbpfMapMaxEntriesDesc = prometheus.NewDesc(
+		"netledger_agent_ebpf_map_max_entries",
+		"The max entries of ebpf conn_meta map in the agent",
+		[]string{"node", "startup_time", "last_seen", "map_name"},
+		nil,
+	)
+
+	AgentsEbpfMapCurrentSizeDesc = prometheus.NewDesc(
+		"netledger_agent_ebpf_map_current_size",
+		"The current size of ebpf conn_meta map in the agent",
+		[]string{"node", "startup_time", "last_seen", "map_name"},
+		nil,
+	)
 )

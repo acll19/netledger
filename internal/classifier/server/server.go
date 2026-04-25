@@ -25,9 +25,11 @@ import (
 )
 
 type registeredAgent struct {
-	node        string
-	startupTime int64
-	lastSeen    time.Time
+	node               string
+	startupTime        int64
+	lastSeen           time.Time
+	ebpfMapMaxEntries  uint32
+	ebpfMapCurrentSize uint32
 }
 
 type Server struct {
@@ -103,23 +105,25 @@ func (s *Server) Start(ctx context.Context, reg *prometheus.Registry) error {
 func (s *Server) cleanupDeadAgents(ctx context.Context) {
 	ticker := time.NewTicker(1 * time.Minute)
 	defer ticker.Stop()
-
-	select {
-	case <-ctx.Done():
-		slog.Info("Stopping registered agent cleanup")
-		close(s.watcherStopCh)
-		return
-	case <-ticker.C:
-		s.mutex.Lock()
-		threadhold := 60 * time.Minute // TODO: make this configurable
-		for node, agent := range s.agentsHeartBeat {
-			if time.Since(agent.lastSeen) > threadhold {
-				slog.Info("Removing registered agent due to inactivity", "node", node)
-				delete(s.agentsHeartBeat, node)
+	for {
+		select {
+		case <-ctx.Done():
+			slog.Info("Stopping registered agent cleanup")
+			close(s.watcherStopCh)
+			return
+		case <-ticker.C:
+			s.mutex.Lock()
+			threadhold := 60 * time.Minute // TODO: make this configurable
+			for node, agent := range s.agentsHeartBeat {
+				if time.Since(agent.lastSeen) > threadhold {
+					slog.Info("Removing registered agent due to inactivity", "node", node)
+					delete(s.agentsHeartBeat, node)
+				}
 			}
+			s.mutex.Unlock()
 		}
-		s.mutex.Unlock()
 	}
+
 }
 
 func (s *Server) WatchPods() {
@@ -304,6 +308,7 @@ func (s *Server) onNodeDelete(obj any) {
 }
 
 func (s *Server) handlePayload(w http.ResponseWriter, r *http.Request) {
+	slog.Debug("handlePayload called")
 	if r.Method != http.MethodPost {
 		http.Error(w, "Invalid request method", http.StatusMethodNotAllowed)
 		return
@@ -332,26 +337,42 @@ func (s *Server) handlePayload(w http.ResponseWriter, r *http.Request) {
 		Mutex:         &s.mutex,
 	}
 
-	// Do not classify flows from agents that have recently restarted to protect against delta spikes in
-	// traffic due to agent restarts.
 	agent := data.AgentNode
+	// detect new agent or update last seen and eBPF map size for existing agent
 	startupTime := data.StartupTime
+	s.mutex.Lock()
 	if _, exists := s.agentsHeartBeat[agent]; !exists {
-		slog.Debug(fmt.Sprintf("Registering new agent %s with startup time %d", agent, startupTime))
+		slog.Debug("registering new agent",
+			"name", agent,
+			"startupTime",
+			startupTime,
+			"ebpfMapMaxEntries",
+			data.EbpfMapMaxEntries,
+			"ebpfMapCurrentSize",
+			data.EbpfMapSize,
+		)
 		s.agentsHeartBeat[agent] = &registeredAgent{
-			node:        agent,
-			startupTime: startupTime,
-			lastSeen:    time.Now(),
+			node:               agent,
+			startupTime:        startupTime,
+			lastSeen:           time.Now(),
+			ebpfMapMaxEntries:  data.EbpfMapMaxEntries,
+			ebpfMapCurrentSize: data.EbpfMapSize,
 		}
 	} else {
 		s.agentsHeartBeat[agent].lastSeen = time.Now()
-		ra := s.agentsHeartBeat[agent]
-		if startupTime != ra.startupTime {
-			slog.Info(fmt.Sprintf("Skipping data from agent %s due to restart detected (received: %d, registered: %d)", agent, startupTime, ra.startupTime))
-			s.agentsHeartBeat[agent].startupTime = startupTime
-			return
-		}
+		s.agentsHeartBeat[agent].ebpfMapMaxEntries = data.EbpfMapMaxEntries
+		s.agentsHeartBeat[agent].ebpfMapCurrentSize = data.EbpfMapSize
+		slog.Debug("received heartbeat from agent",
+			"name", agent,
+			"startupTime",
+			startupTime,
+			"ebpfMapMaxEntries",
+			data.EbpfMapMaxEntries,
+			"ebpfMapCurrentSize",
+			data.EbpfMapSize,
+		)
 	}
+	s.mutex.Unlock()
 
 	flowLogs := classifier.Classify(
 		data,
@@ -371,16 +392,20 @@ func (s *Server) handlePayload(w http.ResponseWriter, r *http.Request) {
 			strconv.FormatUint(fl.Bytes, 10),
 		)
 	}
+
+	w.WriteHeader(http.StatusOK)
 }
 
 func (s *Server) Describe(ch chan<- *prometheus.Desc) {
 	ch <- metrics.IngressDesc
 	ch <- metrics.EgressDesc
+	ch <- metrics.AgentsEbpfMapMaxEntriesDesc
+	ch <- metrics.AgentsEbpfMapCurrentSizeDesc
 }
 
 func (s *Server) Collect(ch chan<- prometheus.Metric) {
-	s.mutex.Lock()
-	defer s.mutex.Unlock()
+	s.mutex.RLock()
+	defer s.mutex.RUnlock()
 
 	for fk, s := range s.ingStatistics {
 		ch <- prometheus.MustNewConstMetric(
@@ -407,6 +432,28 @@ func (s *Server) Collect(ch chan<- prometheus.Metric) {
 			strconv.FormatBool(fk.Internet),
 			strconv.FormatBool(fk.SameRegion),
 			strconv.FormatBool(fk.SameZone),
+		)
+	}
+
+	for _, agent := range s.agentsHeartBeat {
+		ch <- prometheus.MustNewConstMetric(
+			metrics.AgentsEbpfMapMaxEntriesDesc,
+			prometheus.GaugeValue,
+			float64(agent.ebpfMapMaxEntries),
+			agent.node,
+			strconv.FormatInt(agent.startupTime, 10),
+			agent.lastSeen.Format(time.RFC3339),
+			"conn_meta",
+		)
+
+		ch <- prometheus.MustNewConstMetric(
+			metrics.AgentsEbpfMapCurrentSizeDesc,
+			prometheus.GaugeValue,
+			float64(agent.ebpfMapCurrentSize),
+			agent.node,
+			strconv.FormatInt(agent.startupTime, 10),
+			agent.lastSeen.Format(time.RFC3339),
+			"conn_meta",
 		)
 	}
 }
