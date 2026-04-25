@@ -31,6 +31,12 @@ func createFlowEntryWithPods(srcIP, dstIP string, srcPort, dstPort uint16, direc
 	entry.SrcPodNamespace = srcPodNamespace
 	entry.DstPodName = dstPodName
 	entry.DstPodNamespace = dstPodNamespace
+
+	if direction == network.Egress {
+		entry.PodInitiated = 1
+	} else {
+		entry.PodInitiated = 0
+	}
 	return entry
 }
 
@@ -346,6 +352,7 @@ func TestClassify(t *testing.T) {
 			SameRegion:   true,
 			Internet:     false,
 		}
+
 		assert.Equal(t, uint64(3000), opts.EgStatistics[flowKey].Traffic)
 	})
 

@@ -24,6 +24,7 @@ type Flow struct {
 	AgentNode   string      `json:"agentNode"`
 	StartupTime int64       `json:"timestamp"`
 	Entries     []FlowEntry `json:"entries"`
+	// TODO: send here the conn_meta size so classifier can emit metrics about it
 }
 
 type FlowEntry struct {

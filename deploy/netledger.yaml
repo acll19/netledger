@@ -42,7 +42,6 @@ metadata:
   namespace: netledger
 data:
   config.yaml: |
-    node: netledger-cilium-worder2
     statsPollInternval: 5s
     httpClient:
       timeout: 5s
@@ -97,8 +96,6 @@ spec:
         volumeMounts:
         - name: bpffs
           mountPath: /sys/fs/bpf
-        - name: cilium-cgroup
-          mountPath: /run/cilium/cgroupv2
         - name: config-volume
           mountPath: .config/config.yaml
           subPath: config.yaml
@@ -107,9 +104,6 @@ spec:
           hostPath:
             path: /sys/fs/bpf
             type: Directory
-        - name: cilium-cgroup
-          hostPath:
-            path: /run/cilium/cgroupv2
         - name: config-volume
           configMap:
             name: netledger-agent-config
@@ -130,7 +124,7 @@ metadata:
   name: netledger-classifier
 rules:
 - apiGroups: [""]
-  resources: ["pods", "nodes", "services"]
+  resources: ["pods", "nodes"]
   verbs: ["get", "watch", "list"]
 - apiGroups: ["discovery.k8s.io"]
   resources: ["endpointslices"]

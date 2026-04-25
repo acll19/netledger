@@ -174,9 +174,9 @@ parse_ipv4_tuple(struct __sk_buff *skb,
     return -1;
 }
 
-/* ==========================================
+/* ==================================================================
  * sock_ops - learn established TCP connections plus cleanup on close
- * ========================================== */
+ * ================================================================== */
 SEC("sockops")
 int tcp_sockops(struct bpf_sock_ops *skops)
 {
@@ -264,33 +264,7 @@ int cg_ingress(struct __sk_buff *skb)
 
     if (pkt.proto == IPPROTO_TCP)
     {
-        if (tcp_state == IS_TCP_RST || tcp_state == IS_TCP_FIN)
-        {
-            if (meta && !stats)
-            {
-                meta->last_seen = bpf_ktime_get_ns();
-                bpf_map_update_elem(&conn_meta, &cookie, meta, BPF_EXIST);
-
-                struct conn_stats new_stats = {
-                    .cgroup_id = meta->cgroup_id,
-                    .src_ip4 = pkt.src_ip,
-                    .dst_ip4 = pkt.dst_ip,
-                    .src_port = pkt.src_port,
-                    .dst_port = pkt.dst_port,
-                    .proto = pkt.proto,
-                    .conn_direction = INGRESS,
-                    .pod_initiated = meta->pod_initiated,
-                    .rx_bytes = skb->len,
-                };
-                bpf_map_update_elem(&conn_stats, &cookie, &new_stats, BPF_ANY);
-            }
-            else if (meta && stats)
-                __sync_fetch_and_add(&stats->rx_bytes, skb->len);
-
-            bpf_map_delete_elem(&conn_meta, &cookie);
-            return 1;
-        }
-        else if (meta && !stats)
+        if (meta && !stats)
         {
             meta->last_seen = bpf_ktime_get_ns();
             bpf_map_update_elem(&conn_meta, &cookie, meta, BPF_EXIST);
@@ -307,21 +281,15 @@ int cg_ingress(struct __sk_buff *skb)
                 .rx_bytes = skb->len,
             };
             bpf_map_update_elem(&conn_stats, &cookie, &new_stats, BPF_ANY);
-
-            return 1;
         }
-        else
-        {
-            stats = bpf_map_lookup_elem(&conn_stats, &cookie);
-            if (stats)
-                __sync_fetch_and_add(&stats->rx_bytes, skb->len);
-            return 1;
-        }
+        else if (stats)
+            __sync_fetch_and_add(&stats->rx_bytes, skb->len);
+        return 1;
     }
 
     if (pkt.proto == IPPROTO_UDP)
     {
-        // currently not possible to know which if pod initiated.
+        // currently not possible to know if pod initiated.
         // maybe based on first packet seen?
         if (!stats)
         {
@@ -371,34 +339,7 @@ int cg_egress(struct __sk_buff *skb)
 
     if (pkt.proto == IPPROTO_TCP)
     {
-        if (tcp_state == IS_TCP_RST || tcp_state == IS_TCP_FIN)
-        {
-            if (meta && !stats)
-            {
-                meta->last_seen = bpf_ktime_get_ns();
-                bpf_map_update_elem(&conn_meta, &cookie, meta, BPF_EXIST);
-
-                struct conn_stats new_stats = {
-                    .cgroup_id = meta->cgroup_id,
-                    .src_ip4 = pkt.src_ip,
-                    .dst_ip4 = pkt.dst_ip,
-                    .src_port = pkt.src_port,
-                    .dst_port = pkt.dst_port,
-                    .proto = pkt.proto,
-                    .conn_direction = EGRESS,
-                    .pod_initiated = meta->pod_initiated,
-                    .tx_bytes = skb->len,
-                };
-                bpf_map_update_elem(&conn_stats, &cookie, &new_stats, BPF_ANY);
-            }
-            else if (meta && stats)
-                __sync_fetch_and_add(&stats->tx_bytes, skb->len);
-
-            bpf_map_delete_elem(&conn_meta, &cookie);
-
-            return 1;
-        }
-        else if (meta && !stats)
+        if (meta && !stats)
         {
             meta->last_seen = bpf_ktime_get_ns();
             bpf_map_update_elem(&conn_meta, &cookie, meta, BPF_EXIST);
@@ -415,16 +356,11 @@ int cg_egress(struct __sk_buff *skb)
                 .tx_bytes = skb->len,
             };
             bpf_map_update_elem(&conn_stats, &cookie, &new_stats, BPF_ANY);
+        }
+        else if (stats)
+            __sync_fetch_and_add(&stats->tx_bytes, skb->len);
 
-            return 1;
-        }
-        else
-        {
-            stats = bpf_map_lookup_elem(&conn_stats, &cookie);
-            if (stats)
-                __sync_fetch_and_add(&stats->tx_bytes, skb->len);
-            return 1;
-        }
+        return 1;
     }
 
     if (pkt.proto == IPPROTO_UDP)
