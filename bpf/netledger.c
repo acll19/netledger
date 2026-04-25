@@ -229,12 +229,10 @@ int cg_connect4(struct bpf_sock_addr *ctx)
     if (!meta)
     {
         __u64 cgroup_id = bpf_get_current_cgroup_id();
-        struct conn_meta new_meta =
-            {
-                .cgroup_id = cgroup_id,
-                .pod_initiated = CONN_POD_INITIATED,
-                .last_seen = bpf_ktime_get_ns(),
-            };
+        struct conn_meta new_meta = {};
+        new_meta.cgroup_id = cgroup_id;
+        new_meta.pod_initiated = CONN_POD_INITIATED;
+        new_meta.last_seen = bpf_ktime_get_ns();
         bpf_map_update_elem(&conn_meta, &cookie, &new_meta, BPF_ANY);
     }
     return 1;
@@ -269,17 +267,16 @@ int cg_ingress(struct __sk_buff *skb)
             meta->last_seen = bpf_ktime_get_ns();
             bpf_map_update_elem(&conn_meta, &cookie, meta, BPF_EXIST);
 
-            struct conn_stats new_stats = {
-                .cgroup_id = meta->cgroup_id,
-                .src_ip4 = pkt.src_ip,
-                .dst_ip4 = pkt.dst_ip,
-                .src_port = pkt.src_port,
-                .dst_port = pkt.dst_port,
-                .proto = pkt.proto,
-                .conn_direction = INGRESS,
-                .pod_initiated = meta->pod_initiated,
-                .rx_bytes = skb->len,
-            };
+            struct conn_stats new_stats = {};
+            new_stats.cgroup_id = meta->cgroup_id;
+            new_stats.src_ip4 = pkt.src_ip;
+            new_stats.dst_ip4 = pkt.dst_ip;
+            new_stats.src_port = pkt.src_port;
+            new_stats.dst_port = pkt.dst_port;
+            new_stats.proto = pkt.proto;
+            new_stats.conn_direction = INGRESS;
+            new_stats.pod_initiated = meta->pod_initiated;
+            new_stats.rx_bytes = skb->len;
             bpf_map_update_elem(&conn_stats, &cookie, &new_stats, BPF_ANY);
         }
         else if (stats)
@@ -294,17 +291,16 @@ int cg_ingress(struct __sk_buff *skb)
         if (!stats)
         {
             __u64 cgroup_id = bpf_get_current_cgroup_id();
-            struct conn_stats new_stats = {
-                .cgroup_id = cgroup_id,
-                .src_ip4 = pkt.src_ip,
-                .dst_ip4 = pkt.dst_ip,
-                .src_port = pkt.src_port,
-                .dst_port = pkt.dst_port,
-                .proto = pkt.proto,
-                .conn_direction = INGRESS,
-                .pod_initiated = CONN_EXT_INITIATED,
-                .rx_bytes = skb->len,
-            };
+            struct conn_stats new_stats = {};
+            new_stats.cgroup_id = cgroup_id;
+            new_stats.src_ip4 = pkt.src_ip;
+            new_stats.dst_ip4 = pkt.dst_ip;
+            new_stats.src_port = pkt.src_port;
+            new_stats.dst_port = pkt.dst_port;
+            new_stats.proto = pkt.proto;
+            new_stats.conn_direction = INGRESS;
+            new_stats.pod_initiated = CONN_EXT_INITIATED;
+            new_stats.rx_bytes = skb->len;
             bpf_map_update_elem(&conn_stats, &cookie, &new_stats, BPF_ANY);
         }
         else if (stats)
@@ -344,17 +340,16 @@ int cg_egress(struct __sk_buff *skb)
             meta->last_seen = bpf_ktime_get_ns();
             bpf_map_update_elem(&conn_meta, &cookie, meta, BPF_EXIST);
 
-            struct conn_stats new_stats = {
-                .cgroup_id = meta->cgroup_id,
-                .src_ip4 = pkt.src_ip,
-                .dst_ip4 = pkt.dst_ip,
-                .src_port = pkt.src_port,
-                .dst_port = pkt.dst_port,
-                .proto = pkt.proto,
-                .conn_direction = EGRESS,
-                .pod_initiated = meta->pod_initiated,
-                .tx_bytes = skb->len,
-            };
+            struct conn_stats new_stats = {};
+            new_stats.cgroup_id = meta->cgroup_id;
+            new_stats.src_ip4 = pkt.src_ip;
+            new_stats.dst_ip4 = pkt.dst_ip;
+            new_stats.src_port = pkt.src_port;
+            new_stats.dst_port = pkt.dst_port;
+            new_stats.proto = pkt.proto;
+            new_stats.conn_direction = EGRESS;
+            new_stats.pod_initiated = meta->pod_initiated;
+            new_stats.tx_bytes = skb->len;
             bpf_map_update_elem(&conn_stats, &cookie, &new_stats, BPF_ANY);
         }
         else if (stats)
@@ -369,17 +364,16 @@ int cg_egress(struct __sk_buff *skb)
         if (!stats)
         {
             __u64 cgroup_id = bpf_get_current_cgroup_id();
-            struct conn_stats new_stats = {
-                .cgroup_id = cgroup_id,
-                .src_ip4 = pkt.src_ip,
-                .dst_ip4 = pkt.dst_ip,
-                .src_port = pkt.src_port,
-                .dst_port = pkt.dst_port,
-                .proto = pkt.proto,
-                .conn_direction = EGRESS,
-                .pod_initiated = CONN_POD_INITIATED, /* limitation: what if this is a response packet actually? */
-                .tx_bytes = skb->len,
-            };
+            struct conn_stats new_stats = {};
+            new_stats.cgroup_id = cgroup_id;
+            new_stats.src_ip4 = pkt.src_ip;
+            new_stats.dst_ip4 = pkt.dst_ip;
+            new_stats.src_port = pkt.src_port;
+            new_stats.dst_port = pkt.dst_port;
+            new_stats.proto = pkt.proto;
+            new_stats.conn_direction = EGRESS;
+            new_stats.pod_initiated = CONN_POD_INITIATED; /* limitation: what if this is a response packet actually? */
+            new_stats.tx_bytes = skb->len;
             bpf_map_update_elem(&conn_stats, &cookie, &new_stats, BPF_ANY);
             stats = bpf_map_lookup_elem(&conn_stats, &cookie);
         }
