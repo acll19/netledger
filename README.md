@@ -1,6 +1,6 @@
 # NetLedger
 
-NetLedger is a network telemetry system that leverages eBPF (extended Berkeley Packet Filter) to provide network flow classification in Kubernetes environments. See the metrics for more details on classification.
+NetLedger is a network telemetry system that leverages eBPF (extended Berkeley Packet Filter) to provide network flow classification in Kubernetes environments. The main focus is to capture traffic initiated by pods. This could come in handy when you want to monitor the Internet bandwidth or the NAT gateway costs in cloud providers. See the metrics for more details on classification.
 
 ## Overview
 
