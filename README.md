@@ -39,6 +39,8 @@ Feel free to modify the `netledger-classifier-config` ConfigMap according to you
 |-------------------------------------------|---------------------------------------------|----------------------------------------------------------------------|-------|
 | netledger_pod_network_egress_bytes_total  | The amount of traffic egressed from the pod | namespace, pod_name, pod_initiated, internet, same_region, same_zone | bytes |
 | netledger_pod_network_ingress_bytes_total | The amount of traffic ingressed to the pod  | namespace, pod_name, pod_initiated, internet, same_region, same_zone | bytes |
+| netledger_agent_ebpf_map_max_entries | The max entries of ebpf conn_meta map in the agent | node, startup_time, last_seen, map_name | count |
+| netledger_agent_ebpf_map_current_size | The current size of ebpf conn_meta map in the agent | node, startup_time, last_seen, map_name | count |
 
 With the exception of `namespace` and `pod_name`, all labels are boolean.
 Note that `pod_initiated=true` means that pod with `<pod_name>` has initiated the request. This is useful for when you want to know the amount of traffic caused by a pod.
