@@ -1,0 +1,41 @@
+name: LVH Load
+# source: https://h0x0er.github.io/blog/2025/06/21/ebpf-loading-in-different-kernels/#lvh-images
+
+on:
+  workflow_dispatch:
+
+jobs:
+
+  load-vm:
+    runs-on: ubuntu-latest
+    name: eBPF Load
+    strategy:
+      fail-fast: false
+      matrix:
+        kernel:
+          - "6.6-20250616.013250-amd64"
+          - "5.15-20250616.013250-amd64"
+          - "5.10-20250610.043823-amd64"
+
+    timeout-minutes: 10
+    steps:
+      - name: Load NetLedger Agent in ${{ matrix.kernel }}
+        uses: cilium/little-vm-helper@v0.0.30
+        with:
+          test-name: load-netledger
+          image: "kind"
+          image-version: ${{ matrix.kernel }}
+          host-mount: .
+          install-dependencies: "true"
+          cmd: |
+            # print kernel version
+            echo "Kernel Version: "
+            uname -a
+
+            # goto where host is mounted
+            echo ""
+            cd /host
+            ls -lah
+
+            echo ""
+            sudo bpftool prog load ./agent/bpf/netledger_bpfel.o /sys/fs/bpf/netledger && echo "Load Success"
