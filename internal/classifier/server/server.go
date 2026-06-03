@@ -442,7 +442,6 @@ func (s *Server) Collect(ch chan<- prometheus.Metric) {
 			float64(agent.ebpfMapMaxEntries),
 			agent.node,
 			strconv.FormatInt(agent.startupTime, 10),
-			agent.lastSeen.Format(time.RFC3339),
 			"conn_meta",
 		)
 
@@ -452,7 +451,6 @@ func (s *Server) Collect(ch chan<- prometheus.Metric) {
 			float64(agent.ebpfMapCurrentSize),
 			agent.node,
 			strconv.FormatInt(agent.startupTime, 10),
-			agent.lastSeen.Format(time.RFC3339),
 			"conn_meta",
 		)
 	}
