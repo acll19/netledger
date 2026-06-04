@@ -65,6 +65,7 @@ jobs:
         uses: cilium/little-vm-helper@v0.0.30
         with:
           test-name: load-netledger
+          arch: "arm64"
           image: "kind"
           image-version: ${{ matrix.kernel }}
           host-mount: ${{ github.workspace }}
