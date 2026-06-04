@@ -20,16 +20,19 @@ jobs:
           - "5.10-20250610.043823-amd64"
     timeout-minutes: 15
     steps:
+      - uses: actions/checkout@v4
       - name: Load NetLedger Agent in ${{ matrix.kernel }}
         uses: cilium/little-vm-helper@v0.0.30
         with:
           test-name: load-netledger
           image: "kind"
           image-version: ${{ matrix.kernel }}
-          host-mount: .
+          host-mount: ${{ github.workspace }}
           install-dependencies: "true"
           ssh-connect-wait-timeout: "2"
           cmd: |
+            set -euo pipefail
+
             # print kernel version
             echo "Kernel Version: "
             uname -a
@@ -40,4 +43,9 @@ jobs:
             ls -lah
 
             echo ""
-            sudo bpftool prog load ./internal/agent/bpf/netledger_bpfel.o /sys/fs/bpf/netledger && echo "Load Success"
+            sudo bpftool prog loadall \
+              ./internal/agent/bpf/netledger_bpfel.o \
+              /sys/fs/bpf/netledger \
+              2>&1 | tee /tmp/bpf-load.log
+
+            sudo bpftool prog show
