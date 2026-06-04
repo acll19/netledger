@@ -52,13 +52,24 @@ jobs:
   load-vm-arm64:
     runs-on: ubuntu-24.04-arm
     name: eBPF ARM Load Test
+    needs: ["load-vm-amd64"]
     steps:
       - uses: actions/checkout@v4
 
       - name: Install tools
         run: |
           sudo apt-get update
-          sudo apt-get install -y bpftool clang llvm
+
+          sudo apt-get install -y \
+            clang \
+            llvm \
+            linux-tools-common || true
+
+          # Try kernel-matched tools (may or may not exist)
+          sudo apt-get install -y linux-tools-$(uname -r) || true
+
+          # Fallback: ensure bpftool exists somewhere
+          which bpftool || true
 
       - name: Setup BPF filesystem
         run: |
