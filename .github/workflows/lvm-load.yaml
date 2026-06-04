@@ -17,7 +17,7 @@ jobs:
         kernel:
           # https://quay.io/repository/lvh-images/kind?tab=tags
           - "6.6-20260603.072225-amd64"
-          - "6.1-20260603.072225-arm64"
+          - "6.1-20260603.042119-amd64"
           # - "5.15-20260603.072225-amd64" # not supported
     timeout-minutes: 15
     steps:
