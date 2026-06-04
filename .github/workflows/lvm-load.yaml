@@ -64,16 +64,17 @@ jobs:
             llvm \
             linux-tools-common || true
 
-          # Try kernel-matched tools (may or may not exist)
-          sudo apt-get install -y linux-tools-$(uname -r) || true
-
-          # Fallback: ensure bpftool exists somewhere
+          sudo apt-get install -y linux-tools-$(uname -r) \
+             linux-cloud-tools-$(uname -r) \
+             linux-tools-azure \
+             linux-cloud-tools-azure || true
+      - name: Check bpftool
+        run: |
+          echo "Ensure bpftool exists somewhere"
           which bpftool || true
-
       - name: Setup BPF filesystem
         run: |
           sudo mount -t bpf bpf /sys/fs/bpf || true
-
       - name: Load BPF program (host kernel only)
         run: |
           set -euxo pipefail
