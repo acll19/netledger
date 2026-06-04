@@ -25,7 +25,16 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - uses: cilium/little-vm-helper@v0.0.30
+      - name: Install LVH (Go)
+        run: |
+          set -euxo pipefail
+
+          # install lvh CLI
+          go install github.com/cilium/little-vm-helper/cmd/lvh@latest
+
+          echo "$(go env GOPATH)/bin" >> $GITHUB_PATH
+
+          lvh version || true
 
       - name: Pull image
         run: |
