@@ -8,47 +8,49 @@ on:
   workflow_dispatch:
 
 jobs:
-  load-vm:
-    runs-on: ubuntu-latest
-    name: eBPF Load
+  test:
     strategy:
-      fail-fast: false
       matrix:
         kernel:
+          # https://quay.io/repository/lvh-images/kind?tab=tags
           - "6.6-20260603.072225-amd64"
           - "6.6-20260603.072225-arm64"
           - "5.15-20260603.072225-amd64"
           - "5.15-20260603.072225-arm64"
           - "5.10-20260603.072225-amd64"
           - "5.10-20260603.072225-arm64"
-    timeout-minutes: 15
+
+    runs-on: ubuntu-latest
+
     steps:
       - uses: actions/checkout@v4
-      - name: Load NetLedger Agent in ${{ matrix.kernel }}
-        uses: cilium/little-vm-helper@v0.0.30
-        with:
-          test-name: load-netledger
-          image: "kind"
-          image-version: ${{ matrix.kernel }}
-          host-mount: ${{ github.workspace }}
-          install-dependencies: "true"
-          ssh-connect-wait-timeout: "2"
-          cmd: |
-            set -euo pipefail
 
-            # print kernel version
-            echo "Kernel Version: "
-            uname -a
+      - uses: cilium/little-vm-helper@v0.0.30
 
-            # goto where host is mounted
-            echo ""
-            cd /host
-            ls -lah
+      - name: Pull image
+        run: |
+          lvh images pull \
+            quay.io/lvh-images/kind:${{ matrix.kernel }} \
+            --dir .
 
-            echo ""
-            sudo bpftool prog loadall \
-              ./internal/agent/bpf/netledger_bpfel.o \
-              /sys/fs/bpf/netledger \
-              2>&1 | tee /tmp/bpf-load.log
+      - name: Start VM
+        run: |
+          lvh run \
+            --image ./images/*.qcow2 \
+            --host-mount "$PWD" \
+            --daemonize \
+            -p 2222:22
+
+      - name: Load eBPF object
+        run: |
+          ssh -p 2222 \
+            -o StrictHostKeyChecking=no \
+            root@localhost \
+            '
+            mkdir -p /sys/fs/bpf/test
+            bpftool prog loadall \
+              /root/myprog.bpf.o \
+              /sys/fs/bpf/test
 
             sudo bpftool prog show
+            '
