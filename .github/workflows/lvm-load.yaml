@@ -8,7 +8,7 @@ on:
   workflow_dispatch:
 
 jobs:
-  load-vm:
+  load-vm-amd64:
     runs-on: ubuntu-latest
     name: eBPF Load
     strategy:
@@ -17,11 +17,47 @@ jobs:
         kernel:
           # https://quay.io/repository/lvh-images/kind?tab=tags
           - "6.6-20260603.072225-amd64"
-          - "6.6-20260603.072225-arm64"
           - "5.15-20260603.072225-amd64"
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Load NetLedger Agent in ${{ matrix.kernel }}
+        uses: cilium/little-vm-helper@v0.0.30
+        with:
+          test-name: load-netledger
+          image: "kind"
+          image-version: ${{ matrix.kernel }}
+          host-mount: ${{ github.workspace }}
+          install-dependencies: "true"
+          ssh-connect-wait-timeout: "2"
+          cmd: |
+            set -euo pipefail
+
+            # print kernel version
+            echo "Kernel Version: "
+            uname -a
+
+            # goto where host is mounted
+            echo ""
+            cd /host
+            ls -lah
+
+            echo ""
+            sudo bpftool prog loadall \
+              ./internal/agent/bpf/netledger_bpfel.o \
+              /sys/fs/bpf/netledger \
+              2>&1 | tee /tmp/bpf-load.log
+
+            sudo bpftool prog show
+  load-vm-arm64:
+    runs-on: ubuntu-latest
+    name: eBPF Load
+    strategy:
+      fail-fast: false
+      matrix:
+        kernel:
+          - "6.6-20260603.072225-arm64"
           - "5.15-20260603.072225-arm64"
-          - "5.10-20260603.072225-amd64"
-          - "5.10-20260603.072225-arm64"
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
