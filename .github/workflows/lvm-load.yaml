@@ -81,7 +81,7 @@ jobs:
 
           uname -a
 
-          sudo bpftool prog loadall \
+          bpftool prog loadall \
             ./internal/agent/bpf/netledger_bpfel.o \
             /sys/fs/bpf/netledger \
             2>&1 | tee /tmp/bpf-load.log
