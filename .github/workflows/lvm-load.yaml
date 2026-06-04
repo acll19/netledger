@@ -52,7 +52,6 @@ jobs:
   load-vm-arm64:
     runs-on: ubuntu-24.04-arm
     name: eBPF ARM Load Test
-    needs: ["load-vm-amd64"]
     steps:
       - uses: actions/checkout@v4
 
