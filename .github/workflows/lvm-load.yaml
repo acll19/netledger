@@ -10,13 +10,15 @@ on:
 jobs:
   load-vm-amd64:
     runs-on: ubuntu-latest
-    name: eBPF Load
+    name: eBPF Load AMD Test
     strategy:
       fail-fast: false
       matrix:
         kernel:
           # https://quay.io/repository/lvh-images/kind?tab=tags
+          - "6.6-main-amd64"
           - "6.6-20260603.072225-amd64"
+          - "5.15-main-amd64"
           - "5.15-20260603.072225-amd64"
     timeout-minutes: 15
     steps:
@@ -52,46 +54,82 @@ jobs:
   load-vm-arm64:
     runs-on: ubuntu-24.04-arm
     name: eBPF ARM Load Test
+    strategy:
+      fail-fast: false
+      matrix:
+        kernel:
+          - "6.6-main-arm64"
+          - "5.15-main-arm64"
     steps:
       - uses: actions/checkout@v4
+      - name: Load NetLedger Agent in ${{ matrix.kernel }}
+        uses: cilium/little-vm-helper@v0.0.30
+        with:
+          test-name: load-netledger
+          image: "kind"
+          image-version: ${{ matrix.kernel }}
+          host-mount: ${{ github.workspace }}
+          install-dependencies: "true"
+          ssh-connect-wait-timeout: "2"
+          cmd: |
+            set -euo pipefail
 
-      - name: Install tools
-        run: |
-          sudo apt-get update
+            # print kernel version
+            echo "Kernel Version: "
+            uname -a
 
-          sudo apt-get install -y \
-            clang \
-            llvm \
-            linux-tools-common || true
+            # goto where host is mounted
+            echo ""
+            cd /host
+            ls -lah
 
-          sudo apt-get install -y linux-tools-$(uname -r) \
-             linux-cloud-tools-$(uname -r) \
-             linux-tools-azure \
-             linux-cloud-tools-azure || true
-      - name: Check bpftool
-        run: |
-          echo "Ensure bpftool exists somewhere"
-          which bpftool || true
-      - name: Setup BPF filesystem
-        run: |
-          sudo mount -t bpf bpf /sys/fs/bpf || true
-      - name: Load BPF program (host kernel only)
-        run: |
-          set -euxo pipefail
+            echo ""
+            sudo bpftool prog loadall \
+              ./internal/agent/bpf/netledger_bpfel.o \
+              /sys/fs/bpf/netledger \
+              2>&1 | tee /tmp/bpf-load.log
 
-          uname -a
+            sudo bpftool prog show
+    # steps:
+    #   - uses: actions/checkout@v4
 
-          bpftool prog loadall \
-            ./internal/agent/bpf/netledger_bpfel.o \
-            /sys/fs/bpf/netledger \
-            2>&1 | tee /tmp/bpf-load.log
+    #   - name: Install tools
+    #     run: |
+    #       sudo apt-get update
 
-      - name: Show loaded programs
-        if: always()
-        run: |
-          sudo bpftool prog show
+    #       sudo apt-get install -y \
+    #         clang \
+    #         llvm \
+    #         linux-tools-common || true
 
-      - name: Show verifier log on failure
-        if: failure()
-        run: |
-          cat /tmp/bpf-load.log || true
+    #       sudo apt-get install -y linux-tools-$(uname -r) \
+    #          linux-cloud-tools-$(uname -r) \
+    #          linux-tools-azure \
+    #          linux-cloud-tools-azure || true
+    #   - name: Check bpftool
+    #     run: |
+    #       echo "Ensure bpftool exists somewhere"
+    #       which bpftool || true
+    #   - name: Setup BPF filesystem
+    #     run: |
+    #       sudo mount -t bpf bpf /sys/fs/bpf || true
+    #   - name: Load BPF program (host kernel only)
+    #     run: |
+    #       set -euxo pipefail
+
+    #       uname -a
+
+    #       bpftool prog loadall \
+    #         ./internal/agent/bpf/netledger_bpfel.o \
+    #         /sys/fs/bpf/netledger \
+    #         2>&1 | tee /tmp/bpf-load.log
+
+    #   - name: Show loaded programs
+    #     if: always()
+    #     run: |
+    #       sudo bpftool prog show
+
+    #   - name: Show verifier log on failure
+    #     if: failure()
+    #     run: |
+    #       cat /tmp/bpf-load.log || true
