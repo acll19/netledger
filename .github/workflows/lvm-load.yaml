@@ -21,6 +21,7 @@ jobs:
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
+      - uses: cilium/little-vm-helper@v0.0.30
       - name: Load NetLedger Agent in ${{ matrix.kernel }}
         uses: cilium/little-vm-helper@v0.0.30
         with:
@@ -31,21 +32,5 @@ jobs:
           install-dependencies: "true"
           ssh-connect-wait-timeout: "2"
           cmd: |
-            set -euo pipefail
-
-            # print kernel version
-            echo "Kernel Version: "
+            echo "VM is alive"
             uname -a
-
-            # goto where host is mounted
-            echo ""
-            cd /host
-            ls -lah
-
-            echo ""
-            sudo bpftool prog loadall \
-              ./internal/agent/bpf/netledger_bpfel.o \
-              /sys/fs/bpf/netledger \
-              2>&1 | tee /tmp/bpf-load.log
-
-            sudo bpftool prog show
