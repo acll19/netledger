@@ -8,8 +8,11 @@ on:
   workflow_dispatch:
 
 jobs:
-  test:
+  load-vm:
+    runs-on: ubuntu-latest
+    name: eBPF Load
     strategy:
+      fail-fast: false
       matrix:
         kernel:
           # https://quay.io/repository/lvh-images/kind?tab=tags
@@ -19,47 +22,34 @@ jobs:
           - "5.15-20260603.072225-arm64"
           - "5.10-20260603.072225-amd64"
           - "5.10-20260603.072225-arm64"
-
-    runs-on: ubuntu-latest
-
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
+      - name: Load NetLedger Agent in ${{ matrix.kernel }}
+        uses: cilium/little-vm-helper@v0.0.30
+        with:
+          test-name: load-netledger
+          image: "kind"
+          image-version: ${{ matrix.kernel }}
+          host-mount: ${{ github.workspace }}
+          install-dependencies: "true"
+          ssh-connect-wait-timeout: "2"
+          cmd: |
+            set -euo pipefail
 
-      - name: Install LVH (Go)
-        run: |
-          set -euxo pipefail
+            # print kernel version
+            echo "Kernel Version: "
+            uname -a
 
-          # install lvh CLI
-          go install github.com/cilium/little-vm-helper/cmd/lvh@latest
+            # goto where host is mounted
+            echo ""
+            cd /host
+            ls -lah
 
-          echo "$(go env GOPATH)/bin" >> $GITHUB_PATH
-
-          lvh version || true
-
-      - name: Pull image
-        run: |
-          lvh images pull \
-            quay.io/lvh-images/kind:${{ matrix.kernel }} \
-            --dir .
-
-      - name: Start VM
-        run: |
-          lvh run \
-            --image ./images/*.qcow2 \
-            --host-mount "$PWD" \
-            --daemonize \
-            -p 2222:22
-
-      - name: Load eBPF object
-        run: |
-          ssh -p 2222 \
-            -o StrictHostKeyChecking=no \
-            root@localhost \
-            '
-            mkdir -p /sys/fs/bpf/test
-            bpftool prog loadall \
-              /root/myprog.bpf.o \
-              /sys/fs/bpf/test
+            echo ""
+            sudo bpftool prog loadall \
+              ./internal/agent/bpf/netledger_bpfel.o \
+              /sys/fs/bpf/netledger \
+              2>&1 | tee /tmp/bpf-load.log
 
             sudo bpftool prog show
-            '
