@@ -17,12 +17,6 @@ jobs:
         with:
           go-version: 1.25.1
 
-      - name: Run tests
-        run: make test
-
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v2
-
       - name: Install eBPF dependencies
         run: |
           sudo apt-get update
@@ -44,22 +38,18 @@ jobs:
         run: |
           VERSION=${{ env.AGENT_VERSION }} HASH=${{ env.HASH }} REPO=${{ env.REPO }} make build-agent
 
+      - name: Build Classifier
+        run: |
+          VERSION=${{ env.CLASSIFIER_VERSION }} HASH=${{ env.HASH }} REPO=${{ env.REPO }} make build-classifier
+      
+      - name: Run tests
+        run: make test
+
       - name: Upload eBPF object
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           path: ./internal/agent/bpf/netledger_bpfel.o
           archive: false
-
-      - name: Build Classifier
-        run: |
-          VERSION=${{ env.CLASSIFIER_VERSION }} HASH=${{ env.HASH }} REPO=${{ env.REPO }} make build-classifier
-      
-      - name: Log in to GitHub Container Registry
-        uses: docker/login-action@v2
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
   
   load-vm-amd64:
     runs-on: ubuntu-latest
@@ -163,6 +153,14 @@ jobs:
     needs: [build, load-vm-amd64, load-vm-arm64]
     steps:
       - uses: actions/checkout@v4
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v2
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v2
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
       - name: Push images to GitHub Container Registry
         run: |
           docker push ${{ env.REPO }}/netledger-agent:${{ env.AGENT_VERSION }}
