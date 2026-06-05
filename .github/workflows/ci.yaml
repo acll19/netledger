@@ -160,7 +160,7 @@ jobs:
 
   image-push:
     runs-on: ubuntu-latest
-    name: eBPF ARM Load Test
+    name: Image push
     needs: [build, load-vm-amd64, load-vm-arm64]
     steps:
       - uses: actions/checkout@v4
