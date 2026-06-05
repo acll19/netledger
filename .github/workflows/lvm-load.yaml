@@ -52,7 +52,7 @@ jobs:
             sudo bpftool prog show
 
   load-vm-arm64:
-    runs-on: ubuntu-24.04-arm
+    runs-on: ubuntu-latest
     name: eBPF ARM Load Test
     strategy:
       fail-fast: false
