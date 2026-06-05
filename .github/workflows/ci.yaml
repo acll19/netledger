@@ -42,10 +42,28 @@ jobs:
       - name: Build Agent
         run: |
           VERSION=${{ env.AGENT_VERSION }} HASH=${{ env.HASH }} REPO=${{ env.REPO }} make build-agent
+
+      - name: Upload eBPF object
+        uses: actions/upload-artifact@v3
+        with:
+          name: netledger-bpf
+          path: ./internal/agent/bpf/netledger_bpfel.o
+
+      - name: Build Classifier
+        run: |
+          VERSION=${{ env.CLASSIFIER_VERSION }} HASH=${{ env.HASH }} REPO=${{ env.REPO }} make build-classifier
+      
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v2
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
   
   load-vm-amd64:
     runs-on: ubuntu-latest
     name: eBPF Load AMD Test
+    needs: build
     strategy:
       fail-fast: false
       matrix:
@@ -57,6 +75,11 @@ jobs:
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
+      - name: Download eBPF object
+        uses: actions/download-artifact@v3
+        with:
+          name: netledger-bpf
+          path: ./internal/agent/bpf/
       - name: Load NetLedger Agent in ${{ matrix.kernel }}
         uses: cilium/little-vm-helper@v0.0.30
         with:
@@ -89,6 +112,7 @@ jobs:
   load-vm-arm64:
     runs-on: ubuntu-latest
     name: eBPF ARM Load Test
+    needs: build
     strategy:
       fail-fast: false
       matrix:
@@ -97,6 +121,11 @@ jobs:
           # - "5.15-20260603.072225" not supported
     steps:
       - uses: actions/checkout@v4
+      - name: Download eBPF object
+        uses: actions/download-artifact@v3
+        with:
+          name: netledger-bpf
+          path: ./internal/agent/bpf/
       - name: Load NetLedger Agent in ${{ matrix.kernel }}-arm64
         uses: cilium/little-vm-helper@v0.0.30
         with:
@@ -128,18 +157,13 @@ jobs:
               2>&1 | tee /tmp/bpf-load.log
 
             sudo bpftool prog show
-      
-      - name: Build Classifier
-        run: |
-          VERSION=${{ env.CLASSIFIER_VERSION }} HASH=${{ env.HASH }} REPO=${{ env.REPO }} make build-classifier
-      
-      - name: Log in to GitHub Container Registry
-        uses: docker/login-action@v2
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
 
+  image-push:
+    runs-on: ubuntu-latest
+    name: eBPF ARM Load Test
+    needs: [build, load-vm-amd64, load-vm-arm64]
+    steps:
+      - uses: actions/checkout@v4
       - name: Push images to GitHub Container Registry
         run: |
           docker push ${{ env.REPO }}/netledger-agent:${{ env.AGENT_VERSION }}
