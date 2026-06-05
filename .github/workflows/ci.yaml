@@ -80,7 +80,6 @@ jobs:
         uses: actions/download-artifact@a9bc5e6ef2cb54c177f32aa5726adaa15e7e2d59 # v3.1.0
         with:
           name: netledger-bpf
-          path: ./internal/agent/bpf/
       - name: Load NetLedger Agent in ${{ matrix.kernel }}
         uses: cilium/little-vm-helper@v0.0.30
         with:
@@ -126,7 +125,6 @@ jobs:
         uses: actions/download-artifact@a9bc5e6ef2cb54c177f32aa5726adaa15e7e2d59 # v3.1.0
         with:
           name: netledger-bpf
-          path: ./internal/agent/bpf/
       - name: Load NetLedger Agent in ${{ matrix.kernel }}-arm64
         uses: cilium/little-vm-helper@v0.0.30
         with:
