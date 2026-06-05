@@ -22,15 +22,6 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y clang llvm libbpf-dev linux-headers-$(uname -r)
 
-      - name: Verify tools
-        run: |
-          which clang
-          which llvm-strip
-      
-      - name: Build Agent
-        run: |
-          VERSION=${{ env.AGENT_VERSION }} HASH=${{ env.HASH }} REPO=${{ env.REPO }} make build-agent
-
       - name: Run tests
         run: make test
 
