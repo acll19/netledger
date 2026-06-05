@@ -44,7 +44,7 @@ jobs:
           VERSION=${{ env.AGENT_VERSION }} HASH=${{ env.HASH }} REPO=${{ env.REPO }} make build-agent
 
       - name: Upload eBPF object
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: netledger-bpf
           path: ./internal/agent/bpf/netledger_bpfel.o
@@ -76,7 +76,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Download eBPF object
-        uses: actions/download-artifact@v3
+        uses: actions/download-artifact@a9bc5e6ef2cb54c177f32aa5726adaa15e7e2d59 # v3.1.0
         with:
           name: netledger-bpf
           path: ./internal/agent/bpf/
@@ -122,7 +122,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Download eBPF object
-        uses: actions/download-artifact@v3
+        uses: actions/download-artifact@a9bc5e6ef2cb54c177f32aa5726adaa15e7e2d59 # v3.1.0
         with:
           name: netledger-bpf
           path: ./internal/agent/bpf/
