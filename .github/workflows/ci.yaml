@@ -26,22 +26,11 @@ jobs:
         run: |
           which clang
           which llvm-strip
-
-      - name: Load versions from file
-        id: versions
-        run: |
-          echo "AGENT_VERSION=$(cat versions.json | jq -r '.agent')" >> $GITHUB_ENV
-          echo "CLASSIFIER_VERSION=$(cat versions.json | jq -r '.classifier')" >> $GITHUB_ENV
-          echo "REPO=ghcr.io/acll19/netledger" >> $GITHUB_ENV
       
       - name: Build Agent
         run: |
           VERSION=${{ env.AGENT_VERSION }} HASH=${{ env.HASH }} REPO=${{ env.REPO }} make build-agent
 
-      - name: Build Classifier
-        run: |
-          VERSION=${{ env.CLASSIFIER_VERSION }} HASH=${{ env.HASH }} REPO=${{ env.REPO }} make build-classifier
-      
       - name: Run tests
         run: make test
 
@@ -161,7 +150,13 @@ jobs:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
-      - name: Push images to GitHub Container Registry
+      - name: Load versions from file
+        id: versions
         run: |
-          docker push ${{ env.REPO }}/netledger-agent:${{ env.AGENT_VERSION }}
-          docker push ${{ env.REPO }}/netledger-classifier:${{ env.CLASSIFIER_VERSION }}
+          echo "AGENT_VERSION=$(cat versions.json | jq -r '.agent')" >> $GITHUB_ENV
+          echo "CLASSIFIER_VERSION=$(cat versions.json | jq -r '.classifier')" >> $GITHUB_ENV
+          echo "REPO=ghcr.io/acll19/netledger" >> $GITHUB_ENV
+      - name: Build & push images
+        run: |
+          docker buildx build --platform linux/amd64,linux/arm64 -t ${{ env.REPO }}/netledger-agent:${{ env.AGENT_VERSION }} -f Dockerfile.agent --push .
+          docker buildx build --platform linux/amd64,linux/arm64 -t ${{ env.REPO }}/netledger-classifier:${{ env.CLASSIFIER_VERSION }} -f Dockerfile.classifier --push .

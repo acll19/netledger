@@ -1,3 +1,8 @@
+FROM golang:1.25.1 as builder
+WORKDIR /app
+COPY . .
+RUN CGO_ENABLED=0 go build -ldflags="-installsuffix cgo" -o netledger-classifier ./cmd/classifier/main.go
+
 FROM cgr.dev/chainguard/static
-ADD netledger-classifier /netledger-classifier
+COPY --from=builder /app/netledger-classifier /netledger-classifier
 ENTRYPOINT ["/netledger-classifier"]

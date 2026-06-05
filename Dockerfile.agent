@@ -1,4 +1,10 @@
+FROM golang:1.25.1 as builder
+WORKDIR /app
+COPY . .
+RUN go generate ./...
+RUN CGO_ENABLED=0 go build -ldflags="-installsuffix cgo" -o netledger-agent ./cmd/agent/main.go
+
 FROM cgr.dev/chainguard/static
 USER root
-ADD netledger-agent /netledger-agent
+COPY --from=builder /app/netledger-agent /netledger-agent
 ENTRYPOINT ["/netledger-agent"]
