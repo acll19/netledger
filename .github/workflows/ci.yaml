@@ -4,6 +4,7 @@ on:
     branches: [main]
   pull_request:
     branches: [main]
+  workflow_dispatch:
 jobs:
   build:
     runs-on: ubuntu-latest
@@ -41,6 +42,92 @@ jobs:
       - name: Build Agent
         run: |
           VERSION=${{ env.AGENT_VERSION }} HASH=${{ env.HASH }} REPO=${{ env.REPO }} make build-agent
+  
+  load-vm-amd64:
+    runs-on: ubuntu-latest
+    name: eBPF Load AMD Test
+    strategy:
+      fail-fast: false
+      matrix:
+        kernel:
+          # https://quay.io/repository/lvh-images/kind?tab=tags
+          - "6.6-20260603.072225-amd64"
+          # - "6.1-20260603.042119-amd64" not supported
+          # - "5.15-20260603.072225-amd64" # not supported
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Load NetLedger Agent in ${{ matrix.kernel }}
+        uses: cilium/little-vm-helper@v0.0.30
+        with:
+          test-name: load-netledger
+          image: "kind"
+          image-version: ${{ matrix.kernel }}
+          host-mount: ${{ github.workspace }}
+          install-dependencies: "true"
+          ssh-connect-wait-timeout: "2"
+          cmd: |
+            set -euo pipefail
+
+            # print kernel version
+            echo "Kernel Version: "
+            uname -a
+
+            # goto where host is mounted
+            echo ""
+            cd /host
+            ls -lah
+
+            echo ""
+            sudo bpftool prog loadall \
+              ./internal/agent/bpf/netledger_bpfel.o \
+              /sys/fs/bpf/netledger \
+              2>&1 | tee /tmp/bpf-load.log
+
+            sudo bpftool prog show
+
+  load-vm-arm64:
+    runs-on: ubuntu-latest
+    name: eBPF ARM Load Test
+    strategy:
+      fail-fast: false
+      matrix:
+        kernel:
+          - "6.6-20260603.072225"
+          # - "5.15-20260603.072225" not supported
+    steps:
+      - uses: actions/checkout@v4
+      - name: Load NetLedger Agent in ${{ matrix.kernel }}-arm64
+        uses: cilium/little-vm-helper@v0.0.30
+        with:
+          test-name: load-netledger
+          image: "kind"
+          arch: "arm64"
+          cpu-kind: max
+          image-version: ${{ matrix.kernel }}-arm64
+          kernel-version: ${{ matrix.kernel }}
+          host-mount: ${{ github.workspace }}
+          install-dependencies: "true"
+          ssh-connect-wait-timeout: "2"
+          cmd: |
+            set -euo pipefail
+
+            # print kernel version
+            echo "Kernel Version: "
+            uname -a
+
+            # goto where host is mounted
+            echo ""
+            cd /host
+            ls -lah
+
+            echo ""
+            sudo bpftool prog loadall \
+              ./internal/agent/bpf/netledger_bpfel.o \
+              /sys/fs/bpf/netledger \
+              2>&1 | tee /tmp/bpf-load.log
+
+            sudo bpftool prog show
       
       - name: Build Classifier
         run: |
