@@ -69,7 +69,7 @@ jobs:
           image: "kind"
           arch: "arm64"
           image-version: ${{ matrix.kernel }}-arm64
-          kernel-version: ${{ matrix.kernel }}-arm64
+          kernel-version: ${{ matrix.kernel }}
           host-mount: ${{ github.workspace }}
           install-dependencies: "true"
           ssh-connect-wait-timeout: "2"
