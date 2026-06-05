@@ -17,7 +17,7 @@ jobs:
         kernel:
           # https://quay.io/repository/lvh-images/kind?tab=tags
           - "6.6-20260603.072225-amd64"
-          - "6.1-20260603.042119-amd64"
+          # - "6.1-20260603.042119-amd64" not supported
           # - "5.15-20260603.072225-amd64" # not supported
     timeout-minutes: 15
     steps:
@@ -59,7 +59,7 @@ jobs:
       matrix:
         kernel:
           - "6.6-20260603.072225"
-          - "5.15-20260603.072225"
+          # - "5.15-20260603.072225" not supported
     steps:
       - uses: actions/checkout@v4
       - name: Load NetLedger Agent in ${{ matrix.kernel }}-arm64
