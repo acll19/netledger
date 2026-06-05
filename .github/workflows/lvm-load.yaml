@@ -68,6 +68,7 @@ jobs:
           test-name: load-netledger
           image: "kind"
           arch: "arm64"
+          cpu-kind: max
           image-version: ${{ matrix.kernel }}-arm64
           kernel-version: ${{ matrix.kernel }}
           host-mount: ${{ github.workspace }}
