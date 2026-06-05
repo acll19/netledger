@@ -1,5 +1,13 @@
 FROM golang:1.26.4 AS builder
 WORKDIR /app
+
+RUN apt-get update && apt-get install -y \
+    clang \
+    llvm \
+    libbpf-dev \
+    linux-headers-generic \
+    && rm -rf /var/lib/apt/lists/*
+
 COPY . .
 RUN go generate ./...
 RUN CGO_ENABLED=0 go build -ldflags="-installsuffix cgo" -o netledger-agent ./cmd/agent/main.go
