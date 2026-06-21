@@ -308,7 +308,7 @@ func (s *Server) onNodeDelete(obj any) {
 }
 
 func (s *Server) handlePayload(w http.ResponseWriter, r *http.Request) {
-	slog.Debug("handlePayload called")
+	slog.Debug("processing incoming request for network statistics")
 	if r.Method != http.MethodPost {
 		http.Error(w, "Invalid request method", http.StatusMethodNotAllowed)
 		return
@@ -316,13 +316,13 @@ func (s *Server) handlePayload(w http.ResponseWriter, r *http.Request) {
 
 	body, err := io.ReadAll(r.Body)
 	if err != nil {
-		http.Error(w, "Failed to read request body", http.StatusInternalServerError)
+		http.Error(w, "failed to read request body", http.StatusInternalServerError)
 		return
 	}
 
 	data, err := payload.Decode(body)
 	if err != nil {
-		http.Error(w, fmt.Sprintf("Failed to decode request body: %v", err), http.StatusBadRequest)
+		http.Error(w, fmt.Sprintf("failed to decode request body: %v", err), http.StatusBadRequest)
 		return
 	}
 
@@ -381,7 +381,7 @@ func (s *Server) handlePayload(w http.ResponseWriter, r *http.Request) {
 
 	for _, fl := range flowLogs {
 		slog.Debug(
-			"Classified flow",
+			"classified flow",
 			"source",
 			fmt.Sprintf("%s(%s:%d)", fl.Src, fl.SrcIP, fl.SrcPort),
 			"destination",

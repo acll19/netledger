@@ -239,7 +239,7 @@ func classifyDirectClassification(ip string, directClassifications []DirectClass
 		for _, addr := range dc.IPs {
 			_, mask, err := net.ParseCIDR(addr)
 			if err != nil {
-				slog.Warn("Invalid CIDR in direct classification config", "cidr", addr, "error", err)
+				slog.Warn("invalid CIDR in direct classification config", "cidr", addr, "error", err)
 				continue
 			}
 			if mask.Contains(net.ParseIP(ip)) {
