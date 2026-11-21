@@ -207,9 +207,9 @@ func (a *Agent) Start() error {
 				var sport, dport uint16
 				var pod *kubernetes.PodMeta
 
-				a.mLock.Lock()
+				a.mLock.RLock()
 				pod = a.cgroupToPodCache[stats[i].CgroupId]
-				a.mLock.Unlock()
+				a.mLock.RUnlock()
 				if pod == nil {
 					// If the cgroup ID is not in the cache, it means we haven't seen a pod with that cgroup ID yet (or the pod has been deleted)
 					slog.Debug(
@@ -390,9 +390,9 @@ func (a *Agent) cleanUpStaleConnections(ctx context.Context) {
 				// 1. we delete the entry if its cgroup does not exists anymore
 				// 2. else, we delete the entry if it has been unestablished for TTL
 				cgroup := mValues[i].CgroupId
-				a.mLock.Lock()
+				a.mLock.RLock()
 				_, exist := a.cgroupToPodCache[cgroup]
-				a.mLock.Unlock()
+				a.mLock.RUnlock()
 				if !exist {
 					staledConns = append(staledConns, mKeys[i])
 				} else if mValues[i].Established == 0 {
