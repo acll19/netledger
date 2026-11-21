@@ -390,7 +390,10 @@ func (a *Agent) cleanUpStaleConnections(ctx context.Context) {
 				// 1. we delete the entry if its cgroup does not exists anymore
 				// 2. else, we delete the entry if it has been unestablished for TTL
 				cgroup := mValues[i].CgroupId
-				if _, exist := a.cgroupToPodCache[cgroup]; !exist {
+				a.mLock.Lock()
+				_, exist := a.cgroupToPodCache[cgroup]
+				a.mLock.Unlock()
+				if !exist {
 					staledConns = append(staledConns, mKeys[i])
 				} else if mValues[i].Established == 0 {
 					now := time.Now().UnixNano()
