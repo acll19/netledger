@@ -51,12 +51,30 @@ func GetKubernetesClient() (*kubernetes.Clientset, error) {
 	return clientset, nil
 }
 
-func WatchPods(stopCh <-chan struct{}, client kubernetes.Interface, onPodAdd, onPodDelete func(obj any), onPodUpdate func(oldObj, newObj any)) {
+type WatchEventAddDeleteHandler func(obj any)
+type WatchEventUpdateHandler func(oldObj, newObj any)
+type StopChannel <-chan struct{}
+
+type WatchOptions struct {
+	FilterNodeName string
+	Transformer    cache.TransformFunc
+}
+
+func WatchPods(
+	stopCh StopChannel,
+	client kubernetes.Interface, onPodAdd,
+	onPodDelete WatchEventAddDeleteHandler,
+	onPodUpdate WatchEventUpdateHandler, opts WatchOptions,
+) {
+	fieldsSelector := fields.Everything()
+	if opts.FilterNodeName != "" {
+		fieldsSelector = fields.OneTermEqualSelector("spec.nodeName", opts.FilterNodeName)
+	}
 	watchList := cache.NewListWatchFromClient(
 		client.CoreV1().RESTClient(),
 		"pods",
 		metav1.NamespaceAll,
-		fields.Everything(),
+		fieldsSelector,
 	)
 
 	_, controller := cache.NewInformerWithOptions(cache.InformerOptions{
@@ -67,6 +85,7 @@ func WatchPods(stopCh <-chan struct{}, client kubernetes.Interface, onPodAdd, on
 			UpdateFunc: onPodUpdate,
 			DeleteFunc: onPodDelete,
 		},
+		Transform: opts.Transformer,
 	})
 
 	controller.Run(stopCh)

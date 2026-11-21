@@ -142,7 +142,7 @@ func (a *Agent) Start() error {
 	defer cancel()
 
 	watcherStopCh := make(chan struct{})
-	go kubernetes.WatchPods(watcherStopCh, a.onPodAdd, a.onPodDelete, a.onPodUpdate)
+	go kubernetes.WatchPods(watcherStopCh, a.Node, a.onPodAdd, a.onPodDelete, a.onPodUpdate)
 	go a.processPodEvents(ctx)
 	go a.cleanUpStaleConnections(ctx)
 

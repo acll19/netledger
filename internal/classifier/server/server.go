@@ -247,8 +247,8 @@ func (s *Server) onNodeAdd(obj any) {
 	if !ok {
 		return
 	}
-	zone, ok := node.GetLabels()["topology.kubernetes.io/zone"]
-	region, ok := node.GetLabels()["topology.kubernetes.io/region"]
+	zone, ok := node.GetLabels()[ck8s.NodeLabelZone]
+	region, ok := node.GetLabels()[ck8s.NodeLabelRegion]
 	if !ok {
 		zone = "unknown"
 	}
@@ -275,8 +275,8 @@ func (s *Server) onNodeUpdate(oldObj, newObj any) {
 	if !ok {
 		return
 	}
-	zone, ok := node.GetLabels()["topology.kubernetes.io/zone"]
-	region, ok := node.GetLabels()["topology.kubernetes.io/region"]
+	zone, ok := node.GetLabels()[ck8s.NodeLabelZone]
+	region, ok := node.GetLabels()[ck8s.NodeLabelRegion]
 	if !ok {
 		zone = "unknown"
 	}
