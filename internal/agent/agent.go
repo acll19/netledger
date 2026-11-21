@@ -153,9 +153,9 @@ func (a *Agent) Start() error {
 	ticker := time.NewTicker(a.Interval)
 	defer ticker.Stop()
 
-	size := a.objs.ConnStats.MaxEntries()
-	sKeys := make([]uint64, size)
-	stats := make([]bpf.NetLedgerConnStats, size)
+	const batch = 4096
+	sKeys := make([]uint64, batch)
+	stats := make([]bpf.NetLedgerConnStats, batch)
 
 	for {
 		select {
@@ -167,8 +167,8 @@ func (a *Agent) Start() error {
 			slog.Info("Shutting down...")
 			return nil
 		case <-ticker.C:
-			sKeys = sKeys[:size]
-			stats = stats[:size]
+			sKeys = sKeys[:batch]
+			stats = stats[:batch]
 			opts := &ebpf.BatchOptions{}
 			cursor := new(ebpf.MapBatchCursor)
 			n, err := a.objs.ConnStats.BatchLookupAndDelete(cursor, sKeys, stats, opts)
@@ -348,9 +348,9 @@ func (a *Agent) cleanUpStaleConnections(ctx context.Context) {
 	i := time.Duration(a.staleConnCleanUpIntervalInSec) * time.Second
 	ticker := time.NewTicker(i)
 	defer ticker.Stop()
-	size := a.objs.ConnMeta.MaxEntries()
-	mKeys := make([]uint64, size)
-	mValues := make([]bpf.NetLedgerConnMeta, size)
+	const batch = 4096
+	mKeys := make([]uint64, batch)
+	mValues := make([]bpf.NetLedgerConnMeta, batch)
 
 	for {
 		select {
@@ -358,8 +358,8 @@ func (a *Agent) cleanUpStaleConnections(ctx context.Context) {
 			slog.Info("Stopping stale connection cleanup")
 			return
 		case <-ticker.C:
-			mKeys = mKeys[:size]
-			mValues = mValues[:size]
+			mKeys = mKeys[:batch]
+			mValues = mValues[:batch]
 			opts := &ebpf.BatchOptions{}
 			cursor := new(ebpf.MapBatchCursor)
 			n, err := a.objs.ConnMeta.BatchLookup(cursor, mKeys, mValues, opts)
