@@ -236,14 +236,11 @@ func (a *Agent) Start() error {
 					dport = stats[i].DstPort
 				}
 
-				srcAddr := fmt.Sprintf("%s:%d", srcIp.To4().String(), sport)
-				dstAddr := fmt.Sprintf("%s:%d", dstIp.To4().String(), dport)
-
 				slog.Debug(fmt.Sprintf("[Direction %d|Pod Initiated %d] %s -> %s: %d tx bytes, %d rx bytes (srcPod: %s/%s, dstPod: %s/%s)",
 					stats[i].PodInitiated,
 					stats[i].ConnDirection,
-					srcAddr,
-					dstAddr,
+					fmt.Sprintf("%s:%d", srcIp.To4().String(), sport),
+					fmt.Sprintf("%s:%d", dstIp.To4().String(), dport),
 					stats[i].TxBytes,
 					stats[i].RxBytes,
 					srcNs,
