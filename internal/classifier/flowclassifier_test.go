@@ -222,6 +222,30 @@ func TestClassify(t *testing.T) {
 			SameZone:     false,
 			SameRegion:   false,
 			Internet:     true,
+			NatGateway:   true,
+		}
+		assert.Equal(t, uint64(2000), opts.EgStatistics[flowKey].Traffic)
+	})
+
+	t.Run("should classify traffic as nat_gateway when both internet and pod_initiated are true", func(t *testing.T) {
+		opts := createTestClassifyOptions(createDefaultConfig())
+		entry := createFlowEntryWithPods(
+			"10.0.1.1", "8.8.8.8", 8000, 53, network.Egress, 2000, 1000,
+			"pod-1", "default", "external-dns", "external",
+		)
+		data := payload.Flow{Entries: []payload.FlowEntry{entry}}
+
+		result := Classify(data, opts)
+
+		require.Len(t, result, 1)
+		flowKey := metrics.FlowKey{
+			PodName:      "pod-1",
+			Namespace:    "default",
+			PodInitiated: true,
+			SameZone:     false,
+			SameRegion:   false,
+			Internet:     true,
+			NatGateway:   true,
 		}
 		assert.Equal(t, uint64(2000), opts.EgStatistics[flowKey].Traffic)
 	})

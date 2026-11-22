@@ -13,6 +13,7 @@ type FlowKey struct {
 	SameZone     bool
 	SameRegion   bool
 	PodInitiated bool
+	NatGateway   bool
 }
 
 type StatisticMap = map[FlowKey]FlowSize
@@ -26,14 +27,14 @@ var (
 	IngressDesc = prometheus.NewDesc(
 		"netledger_pod_network_ingress_bytes_total",
 		"The amount of traffic ingressed to the pod",
-		[]string{"namespace", "pod_name", "pod_initiated", "internet", "same_region", "same_zone"},
+		[]string{"namespace", "pod_name", "pod_initiated", "internet", "nat_gateway", "same_region", "same_zone"},
 		nil,
 	)
 
 	EgressDesc = prometheus.NewDesc(
 		"netledger_pod_network_egress_bytes_total",
 		"The amount of traffic egressed from the pod",
-		[]string{"namespace", "pod_name", "pod_initiated", "internet", "same_region", "same_zone"},
+		[]string{"namespace", "pod_name", "pod_initiated", "internet", "nat_gateway", "same_region", "same_zone"},
 		nil,
 	)
 

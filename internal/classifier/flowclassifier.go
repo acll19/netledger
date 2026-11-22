@@ -76,6 +76,7 @@ func Classify(data payload.Flow, opts ClassifyOptions) []FlowLog {
 		flowKey.PodInitiated = true
 		if entry.PodInitiated == 0 {
 			flowKey.PodInitiated = false
+			flowKey.NatGateway = false
 		}
 
 		switch entry.Direction {
@@ -107,6 +108,7 @@ func Classify(data payload.Flow, opts ClassifyOptions) []FlowLog {
 			if !classified {
 				isInternet := network.IsInternetIP(srcParsed)
 				flowKey.Internet = isInternet
+				flowKey.NatGateway = isInternet && flowKey.PodInitiated
 				flowKey.SameRegion = srcRegion == dstRegion
 				flowKey.SameZone = srcZone == dstZone
 			}
@@ -174,6 +176,7 @@ func doClassify(ip, region, zone string, flowKey *metrics.FlowKey, config Config
 		flowKey.Internet = true
 		flowKey.SameRegion = false
 		flowKey.SameZone = false
+		flowKey.NatGateway = flowKey.PodInitiated
 		return true
 	}
 
