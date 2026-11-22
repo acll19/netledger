@@ -82,6 +82,11 @@ func createDefaultConfig() Config {
 }
 
 func createTestClassifyOptions(config Config) ClassifyOptions {
+	matcher, err := NewMatcher(config.Destinations)
+	if err != nil {
+		panic(err)
+	}
+
 	return ClassifyOptions{
 		PodIndex:      createPodIndex(),
 		PodIpIndex:    map[uint32]metrics.PodKey{},
@@ -89,7 +94,7 @@ func createTestClassifyOptions(config Config) ClassifyOptions {
 		NodeIpIndex:   map[uint32]string{},
 		IngStatistics: make(metrics.StatisticMap),
 		EgStatistics:  make(metrics.StatisticMap),
-		Config:        config,
+		Matcher:       matcher,
 		Mutex:         &sync.RWMutex{},
 	}
 }
@@ -484,6 +489,7 @@ func TestClassify(t *testing.T) {
 			SameZone:     false,
 			SameRegion:   false,
 			Internet:     true,
+			NatGateway:   true,
 		}
 		assert.Equal(t, uint64(2000), opts.EgStatistics[flowKey].Traffic)
 	})

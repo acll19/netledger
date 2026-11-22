@@ -44,11 +44,16 @@ type Server struct {
 	epSliceInformer cache.SharedIndexInformer
 	mutex           sync.RWMutex
 	agentsHeartBeat map[string]*registeredAgent // map to track registered agents by node name
-	config          classifier.Config
+	matcher         *classifier.Matcher
 	watcherStopCh   chan struct{}
 }
 
-func NewServer(clientset *kubernetes.Clientset, config classifier.Config) *Server {
+func NewServer(clientset *kubernetes.Clientset, config classifier.Config) (*Server, error) {
+	matcher, err := classifier.NewMatcher(config.Destinations)
+	if err != nil {
+		return nil, err
+	}
+
 	server := &Server{
 		clientset:       clientset,
 		podIpIndex:      map[uint32]metrics.PodKey{},
@@ -58,10 +63,10 @@ func NewServer(clientset *kubernetes.Clientset, config classifier.Config) *Serve
 		ingStatistics:   metrics.StatisticMap{},
 		egStatistics:    metrics.StatisticMap{},
 		agentsHeartBeat: map[string]*registeredAgent{},
-		config:          config,
+		matcher:         matcher,
 		watcherStopCh:   make(chan struct{}),
 	}
-	return server
+	return server, nil
 }
 
 func (s *Server) Start(ctx context.Context, reg *prometheus.Registry) error {
@@ -333,7 +338,7 @@ func (s *Server) handlePayload(w http.ResponseWriter, r *http.Request) {
 		NodeIpIndex:   s.nodeIpIndex,
 		IngStatistics: s.ingStatistics,
 		EgStatistics:  s.egStatistics,
-		Config:        s.config,
+		Matcher:       s.matcher,
 		Mutex:         &s.mutex,
 	}
 
@@ -416,6 +421,7 @@ func (s *Server) Collect(ch chan<- prometheus.Metric) {
 			fk.PodName,
 			strconv.FormatBool(fk.PodInitiated),
 			strconv.FormatBool(fk.Internet),
+			strconv.FormatBool(fk.NatGateway),
 			strconv.FormatBool(fk.SameRegion),
 			strconv.FormatBool(fk.SameZone),
 		)
@@ -430,6 +436,7 @@ func (s *Server) Collect(ch chan<- prometheus.Metric) {
 			fk.PodName,
 			strconv.FormatBool(fk.PodInitiated),
 			strconv.FormatBool(fk.Internet),
+			strconv.FormatBool(fk.NatGateway),
 			strconv.FormatBool(fk.SameRegion),
 			strconv.FormatBool(fk.SameZone),
 		)

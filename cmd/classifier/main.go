@@ -38,7 +38,11 @@ func main() {
 	defer stop()
 
 	config := loadConfig()
-	server := server.NewServer(clientset, config)
+	server, err := server.NewServer(clientset, config)
+	if err != nil {
+		slog.Error("Error initializing classifier", "error", err)
+		os.Exit(1)
+	}
 
 	go server.WatchPods()
 	go server.WatchNodes()

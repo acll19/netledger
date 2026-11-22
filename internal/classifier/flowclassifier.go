@@ -2,8 +2,6 @@ package classifier
 
 import (
 	"fmt"
-	"log/slog"
-	"net"
 	"net/netip"
 	"sync"
 
@@ -33,6 +31,7 @@ type FlowLog struct {
 	Direction    int
 	Bytes        uint64
 	PodInitiated int
+	NatGateway   bool
 }
 
 type ClassifyOptions struct {
@@ -42,7 +41,7 @@ type ClassifyOptions struct {
 	NodeIpIndex   map[uint32]string
 	IngStatistics metrics.StatisticMap
 	EgStatistics  metrics.StatisticMap
-	Config        Config
+	Matcher       *Matcher
 	Mutex         *sync.RWMutex
 }
 
@@ -81,10 +80,11 @@ func Classify(data payload.Flow, opts ClassifyOptions) []FlowLog {
 
 		switch entry.Direction {
 		case network.Egress:
-			classified := doClassify(dstIp, srcRegion, srcZone, &flowKey, opts.Config)
+			classified := doClassify(dstParsed, srcRegion, srcZone, &flowKey, opts.Matcher)
 			if !classified {
 				isInternet := network.IsInternetIP(dstParsed)
 				flowKey.Internet = isInternet
+				flowKey.NatGateway = isInternet && flowKey.PodInitiated
 				flowKey.SameRegion = srcRegion == dstRegion
 				flowKey.SameZone = srcZone == dstZone
 			}
@@ -104,7 +104,7 @@ func Classify(data payload.Flow, opts ClassifyOptions) []FlowLog {
 			}
 			opts.Mutex.Unlock()
 		case network.Ingress:
-			classified := doClassify(srcIp, dstRegion, dstZone, &flowKey, opts.Config)
+			classified := doClassify(srcParsed, dstRegion, dstZone, &flowKey, opts.Matcher)
 			if !classified {
 				isInternet := network.IsInternetIP(srcParsed)
 				flowKey.Internet = isInternet
@@ -162,17 +162,15 @@ func searchPod(ip string, entry payload.FlowEntry, podIpIndex map[uint32]metrics
 	return pod, ok
 }
 
-func doClassify(ip, region, zone string, flowKey *metrics.FlowKey, config Config) bool {
-	r, z, ok := classifyDirectClassification(ip, config.Destinations.DirectClassification)
-	if ok {
-		flowKey.SameRegion = r == region
-		flowKey.SameZone = z == zone
+func doClassify(ip netip.Addr, region, zone string, flowKey *metrics.FlowKey, matcher *Matcher) bool {
+	if classification, ok := matcher.direct.lookup(ip); ok {
+		flowKey.SameRegion = classification.Region == region
+		flowKey.SameZone = classification.Zone == zone
 		flowKey.Internet = false
 		return true
 	}
 
-	internet := classifyInternet(ip, config.Destinations.Internet)
-	if internet {
+	if _, ok := matcher.internet.lookup(ip); ok {
 		flowKey.Internet = true
 		flowKey.SameRegion = false
 		flowKey.SameZone = false
@@ -180,105 +178,25 @@ func doClassify(ip, region, zone string, flowKey *metrics.FlowKey, config Config
 		return true
 	}
 
-	inZone := classifyInZone(ip, config.Destinations.InZone)
-	if inZone {
+	if _, ok := matcher.inZone.lookup(ip); ok {
 		flowKey.SameZone = true
 		flowKey.SameRegion = true
 		flowKey.Internet = false
 		return true
 	}
 
-	inRegion := classifyInRegion(ip, config.Destinations.InRegion)
-	if inRegion {
+	if _, ok := matcher.inRegion.lookup(ip); ok {
 		flowKey.SameRegion = true
 		flowKey.SameZone = false
 		flowKey.Internet = false
 		return true
 	}
 
-	crossRegion := classifyCrossRegion(ip, config.Destinations.CrossRegion)
-	if crossRegion {
+	if _, ok := matcher.crossRegion.lookup(ip); ok {
 		flowKey.SameRegion = false
 		flowKey.SameZone = false
 		flowKey.Internet = false
 		return true
-	}
-
-	return false
-}
-
-func classifyInZone(ip string, inZone []string) bool {
-	for _, addr := range inZone {
-		_, mask, err := net.ParseCIDR(addr)
-		if err != nil {
-			slog.Warn("Invalid CIDR in in-zone config", "cidr", addr, "error", err)
-			continue
-		}
-		if mask.Contains(net.ParseIP(ip)) {
-			return true
-		}
-	}
-
-	return false
-}
-
-func classifyInRegion(ip string, inRegion []string) bool {
-	for _, addr := range inRegion {
-		_, mask, err := net.ParseCIDR(addr)
-		if err != nil {
-			slog.Warn("Invalid CIDR in in-region config", "cidr", addr, "error", err)
-			continue
-		}
-		if mask.Contains(net.ParseIP(ip)) {
-			return true
-		}
-	}
-
-	return false
-}
-
-func classifyDirectClassification(ip string, directClassifications []DirectClassification) (string, string, bool) {
-	for _, dc := range directClassifications {
-		for _, addr := range dc.IPs {
-			_, mask, err := net.ParseCIDR(addr)
-			if err != nil {
-				slog.Warn("invalid CIDR in direct classification config", "cidr", addr, "error", err)
-				continue
-			}
-			if mask.Contains(net.ParseIP(ip)) {
-				return dc.Region, dc.Zone, true
-			}
-		}
-	}
-
-	return "", "", false
-}
-
-func classifyCrossRegion(ip string, crossRegion []string) bool {
-	for _, addr := range crossRegion {
-		_, mask, err := net.ParseCIDR(addr)
-		if err != nil {
-			slog.Warn("Invalid CIDR in cross-region config", "cidr", addr, "error", err)
-			continue
-		}
-		if mask.Contains(net.ParseIP(ip)) {
-			return true
-		}
-	}
-
-	return false
-}
-
-func classifyInternet(ip string, internet []string) bool {
-	for _, addr := range internet {
-		_, mask, err := net.ParseCIDR(addr)
-		if err != nil {
-			slog.Warn("Invalid CIDR in internet config", "cidr", addr, "error", err)
-			continue
-		}
-		if mask.Contains(net.ParseIP(ip)) {
-			return true
-		}
 	}
 
 	return false
