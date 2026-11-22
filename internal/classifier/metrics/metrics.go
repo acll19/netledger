@@ -51,4 +51,18 @@ var (
 		[]string{"node", "startup_time", "map_name"},
 		nil,
 	)
+
+	ConfigReloadsDesc = prometheus.NewDesc(
+		"netledger_config_reloads_total",
+		"Number of classifier config reload attempts by result",
+		[]string{"result"},
+		nil,
+	)
+
+	ConfigHashDesc = prometheus.NewDesc(
+		"netledger_config_info",
+		"Current classifier configuration identified by its SHA-256 hash",
+		[]string{"sha256"},
+		nil,
+	)
 )

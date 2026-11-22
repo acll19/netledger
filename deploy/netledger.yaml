@@ -238,8 +238,7 @@ spec:
           name: http
         volumeMounts:
         - name: config-volume
-          mountPath: .config/config.yaml
-          subPath: config.yaml
+          mountPath: /etc/netledger
       volumes:
       - name: config-volume
         configMap:

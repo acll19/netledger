@@ -44,14 +44,13 @@ type Server struct {
 	epSliceInformer cache.SharedIndexInformer
 	mutex           sync.RWMutex
 	agentsHeartBeat map[string]*registeredAgent // map to track registered agents by node name
-	matcher         *classifier.Matcher
+	matcherHolder   *classifier.MatcherHolder
 	watcherStopCh   chan struct{}
 }
 
-func NewServer(clientset *kubernetes.Clientset, config classifier.Config) (*Server, error) {
-	matcher, err := classifier.NewMatcher(config.Destinations)
-	if err != nil {
-		return nil, err
+func NewServer(clientset *kubernetes.Clientset, snapshot classifier.ConfigSnapshot) (*Server, error) {
+	if snapshot.Matcher == nil || snapshot.SHA256 == "" {
+		return nil, fmt.Errorf("invalid config snapshot")
 	}
 
 	server := &Server{
@@ -63,10 +62,14 @@ func NewServer(clientset *kubernetes.Clientset, config classifier.Config) (*Serv
 		ingStatistics:   metrics.StatisticMap{},
 		egStatistics:    metrics.StatisticMap{},
 		agentsHeartBeat: map[string]*registeredAgent{},
-		matcher:         matcher,
+		matcherHolder:   classifier.NewMatcherHolder(snapshot),
 		watcherStopCh:   make(chan struct{}),
 	}
 	return server, nil
+}
+
+func (s *Server) WatchConfig(ctx context.Context, path string, interval time.Duration) error {
+	return s.matcherHolder.Watch(ctx, path, interval)
 }
 
 func (s *Server) Start(ctx context.Context, reg *prometheus.Registry) error {
@@ -338,7 +341,7 @@ func (s *Server) handlePayload(w http.ResponseWriter, r *http.Request) {
 		NodeIpIndex:   s.nodeIpIndex,
 		IngStatistics: s.ingStatistics,
 		EgStatistics:  s.egStatistics,
-		Matcher:       s.matcher,
+		Matcher:       s.matcherHolder.Get(),
 		Mutex:         &s.mutex,
 	}
 
@@ -406,6 +409,8 @@ func (s *Server) Describe(ch chan<- *prometheus.Desc) {
 	ch <- metrics.EgressDesc
 	ch <- metrics.AgentsEbpfMapMaxEntriesDesc
 	ch <- metrics.AgentsEbpfMapCurrentSizeDesc
+	ch <- metrics.ConfigReloadsDesc
+	ch <- metrics.ConfigHashDesc
 }
 
 func (s *Server) Collect(ch chan<- prometheus.Metric) {
@@ -461,4 +466,23 @@ func (s *Server) Collect(ch chan<- prometheus.Metric) {
 			"conn_meta",
 		)
 	}
+
+	ch <- prometheus.MustNewConstMetric(
+		metrics.ConfigReloadsDesc,
+		prometheus.CounterValue,
+		float64(s.matcherHolder.ReloadSuccesses()),
+		"success",
+	)
+	ch <- prometheus.MustNewConstMetric(
+		metrics.ConfigReloadsDesc,
+		prometheus.CounterValue,
+		float64(s.matcherHolder.ReloadFailures()),
+		"failure",
+	)
+	ch <- prometheus.MustNewConstMetric(
+		metrics.ConfigHashDesc,
+		prometheus.GaugeValue,
+		1,
+		s.matcherHolder.SHA256(),
+	)
 }

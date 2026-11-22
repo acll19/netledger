@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
+	"time"
 
 	"github.com/acll19/netledger/internal/classifier"
 	"github.com/acll19/netledger/internal/classifier/server"
@@ -16,7 +17,8 @@ import (
 )
 
 var (
-	logLevel string
+	logLevel   string
+	configPath string
 )
 
 func main() {
@@ -37,12 +39,23 @@ func main() {
 	)
 	defer stop()
 
-	config := loadConfig()
-	server, err := server.NewServer(clientset, config)
+	snapshot, err := classifier.LoadConfigSnapshot(configPath)
+	if err != nil {
+		slog.Error("Error loading classifier config", "path", configPath, "error", err)
+		os.Exit(1)
+	}
+
+	server, err := server.NewServer(clientset, snapshot)
 	if err != nil {
 		slog.Error("Error initializing classifier", "error", err)
 		os.Exit(1)
 	}
+
+	go func() {
+		if err := server.WatchConfig(ctx, configPath, 20*time.Second); err != nil {
+			slog.Error("Error starting config watcher", "error", err)
+		}
+	}()
 
 	go server.WatchPods()
 	go server.WatchNodes()
@@ -54,12 +67,5 @@ func main() {
 
 func init() {
 	flag.StringVar(&logLevel, "log-level", "info", "Log level (debug, info, warn, error)")
-}
-
-func loadConfig() classifier.Config {
-	config, err := classifier.LoadConfig(".config/config.yaml")
-	if err != nil {
-		slog.Debug("Error loading config", "error", err)
-	}
-	return config
+	flag.StringVar(&configPath, "config", "/etc/netledger/config.yaml", "Path to classifier YAML config")
 }
