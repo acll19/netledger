@@ -183,13 +183,13 @@ func (a *Agent) Start() error {
 				slog.Debug("debug printing", "keys", len(sKeys), "started with", n)
 
 				entries := make([]payload.FlowEntry, 0, len(sKeys))
-				for i := range len(sKeys) {
+				for sIdx := range len(sKeys) {
 					// Filter out entries that are not associated with any cgroup (i.e., not associated with any process)
-					if stats[i].CgroupId == 0 {
+					if stats[sIdx].CgroupId == 0 {
 						continue
 					}
 
-					if stats[i].TxBytes == 0 && stats[i].RxBytes == 0 {
+					if stats[sIdx].TxBytes == 0 && stats[sIdx].RxBytes == 0 {
 						continue
 					}
 
@@ -199,41 +199,41 @@ func (a *Agent) Start() error {
 					var pod *kubernetes.PodMeta
 
 					a.mLock.RLock()
-					pod = a.cgroupToPodCache[stats[i].CgroupId]
+					pod = a.cgroupToPodCache[stats[sIdx].CgroupId]
 					a.mLock.RUnlock()
 					if pod == nil {
 						// If the cgroup ID is not in the cache, it means we haven't seen a pod with that cgroup ID yet (or the pod has been deleted)
 						slog.Debug(
-							fmt.Sprintf("cgroup ID %d not found in cache", stats[i].CgroupId),
-							"src:port", fmt.Sprintf("%s:%d", network.Uint32ToIP(stats[i].DstIp4).To4().String(), stats[i].DstPort),
-							"dst:port", fmt.Sprintf("%s:%d", network.Uint32ToIP(stats[i].SrcIp4).To4().String(), stats[i].SrcPort),
+							fmt.Sprintf("cgroup ID %d not found in cache", stats[sIdx].CgroupId),
+							"src:port", fmt.Sprintf("%s:%d", network.Uint32ToIP(stats[sIdx].DstIp4).To4().String(), stats[sIdx].DstPort),
+							"dst:port", fmt.Sprintf("%s:%d", network.Uint32ToIP(stats[sIdx].SrcIp4).To4().String(), stats[sIdx].SrcPort),
 						)
 						continue
 					}
 
-					if stats[i].ConnDirection == network.Egress {
+					if stats[sIdx].ConnDirection == network.Egress {
 						srcPod = pod.Name
 						srcNs = pod.Namespace
-						srcIp = network.Uint32ToIP(stats[i].SrcIp4)
-						sport = stats[i].SrcPort
-						dstIp = network.Uint32ToIP(stats[i].DstIp4)
-						dport = stats[i].DstPort
+						srcIp = network.Uint32ToIP(stats[sIdx].SrcIp4)
+						sport = stats[sIdx].SrcPort
+						dstIp = network.Uint32ToIP(stats[sIdx].DstIp4)
+						dport = stats[sIdx].DstPort
 					} else {
 						dstPod = pod.Name
 						dstNs = pod.Namespace
-						srcIp = network.Uint32ToIP(stats[i].DstIp4)
-						sport = stats[i].SrcPort
-						dstIp = network.Uint32ToIP(stats[i].SrcIp4)
-						dport = stats[i].DstPort
+						srcIp = network.Uint32ToIP(stats[sIdx].DstIp4)
+						sport = stats[sIdx].SrcPort
+						dstIp = network.Uint32ToIP(stats[sIdx].SrcIp4)
+						dport = stats[sIdx].DstPort
 					}
 
 					slog.Debug(fmt.Sprintf("[Direction %d|Pod Initiated %d] %s -> %s: %d tx bytes, %d rx bytes (srcPod: %s/%s, dstPod: %s/%s)",
-						stats[i].PodInitiated,
-						stats[i].ConnDirection,
+						stats[sIdx].PodInitiated,
+						stats[sIdx].ConnDirection,
 						fmt.Sprintf("%s:%d", srcIp.To4().String(), sport),
 						fmt.Sprintf("%s:%d", dstIp.To4().String(), dport),
-						stats[i].TxBytes,
-						stats[i].RxBytes,
+						stats[sIdx].TxBytes,
+						stats[sIdx].RxBytes,
 						srcNs,
 						srcPod,
 						dstNs,
@@ -241,14 +241,14 @@ func (a *Agent) Start() error {
 					))
 
 					entry := payload.FlowEntry{
-						PodInitiated:    stats[i].PodInitiated,
-						Direction:       stats[i].ConnDirection,
+						PodInitiated:    stats[sIdx].PodInitiated,
+						Direction:       stats[sIdx].ConnDirection,
 						SrcIP:           srcIp.To4().String(),
 						SrcPort:         sport,
 						DstIP:           dstIp.To4().String(),
 						DstPort:         dport,
-						TxBytes:         stats[i].TxBytes,
-						RxBytes:         stats[i].RxBytes,
+						TxBytes:         stats[sIdx].TxBytes,
+						RxBytes:         stats[sIdx].RxBytes,
 						SrcPodName:      srcPod,
 						SrcPodNamespace: srcNs,
 						DstPodName:      dstPod,
