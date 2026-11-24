@@ -177,19 +177,18 @@ func (a *Agent) Start() error {
 					break
 				}
 
-				sKeys = sKeys[:n]
-				stats = stats[:n]
+				batchStats := stats[:n]
 
-				slog.Debug("debug printing", "keys", len(sKeys), "started with", n)
+				slog.Debug("debug printing", "keys", n)
 
-				entries := make([]payload.FlowEntry, 0, len(sKeys))
-				for sIdx := range len(sKeys) {
+				entries := make([]payload.FlowEntry, 0, n)
+				for sIdx := range batchStats {
 					// Filter out entries that are not associated with any cgroup (i.e., not associated with any process)
-					if stats[sIdx].CgroupId == 0 {
+					if batchStats[sIdx].CgroupId == 0 {
 						continue
 					}
 
-					if stats[sIdx].TxBytes == 0 && stats[sIdx].RxBytes == 0 {
+					if batchStats[sIdx].TxBytes == 0 && batchStats[sIdx].RxBytes == 0 {
 						continue
 					}
 
@@ -199,41 +198,41 @@ func (a *Agent) Start() error {
 					var pod *kubernetes.PodMeta
 
 					a.mLock.RLock()
-					pod = a.cgroupToPodCache[stats[sIdx].CgroupId]
+					pod = a.cgroupToPodCache[batchStats[sIdx].CgroupId]
 					a.mLock.RUnlock()
 					if pod == nil {
 						// If the cgroup ID is not in the cache, it means we haven't seen a pod with that cgroup ID yet (or the pod has been deleted)
 						slog.Debug(
-							fmt.Sprintf("cgroup ID %d not found in cache", stats[sIdx].CgroupId),
-							"src:port", fmt.Sprintf("%s:%d", network.Uint32ToIP(stats[sIdx].DstIp4).To4().String(), stats[sIdx].DstPort),
-							"dst:port", fmt.Sprintf("%s:%d", network.Uint32ToIP(stats[sIdx].SrcIp4).To4().String(), stats[sIdx].SrcPort),
+							fmt.Sprintf("cgroup ID %d not found in cache", batchStats[sIdx].CgroupId),
+							"src:port", fmt.Sprintf("%s:%d", network.Uint32ToIP(batchStats[sIdx].DstIp4).To4().String(), batchStats[sIdx].DstPort),
+							"dst:port", fmt.Sprintf("%s:%d", network.Uint32ToIP(batchStats[sIdx].SrcIp4).To4().String(), batchStats[sIdx].SrcPort),
 						)
 						continue
 					}
 
-					if stats[sIdx].ConnDirection == network.Egress {
+					if batchStats[sIdx].ConnDirection == network.Egress {
 						srcPod = pod.Name
 						srcNs = pod.Namespace
-						srcIp = network.Uint32ToIP(stats[sIdx].SrcIp4)
-						sport = stats[sIdx].SrcPort
-						dstIp = network.Uint32ToIP(stats[sIdx].DstIp4)
-						dport = stats[sIdx].DstPort
+						srcIp = network.Uint32ToIP(batchStats[sIdx].SrcIp4)
+						sport = batchStats[sIdx].SrcPort
+						dstIp = network.Uint32ToIP(batchStats[sIdx].DstIp4)
+						dport = batchStats[sIdx].DstPort
 					} else {
 						dstPod = pod.Name
 						dstNs = pod.Namespace
-						srcIp = network.Uint32ToIP(stats[sIdx].DstIp4)
-						sport = stats[sIdx].SrcPort
-						dstIp = network.Uint32ToIP(stats[sIdx].SrcIp4)
-						dport = stats[sIdx].DstPort
+						srcIp = network.Uint32ToIP(batchStats[sIdx].DstIp4)
+						sport = batchStats[sIdx].SrcPort
+						dstIp = network.Uint32ToIP(batchStats[sIdx].SrcIp4)
+						dport = batchStats[sIdx].DstPort
 					}
 
 					slog.Debug(fmt.Sprintf("[Direction %d|Pod Initiated %d] %s -> %s: %d tx bytes, %d rx bytes (srcPod: %s/%s, dstPod: %s/%s)",
-						stats[sIdx].PodInitiated,
-						stats[sIdx].ConnDirection,
+						batchStats[sIdx].PodInitiated,
+						batchStats[sIdx].ConnDirection,
 						fmt.Sprintf("%s:%d", srcIp.To4().String(), sport),
 						fmt.Sprintf("%s:%d", dstIp.To4().String(), dport),
-						stats[sIdx].TxBytes,
-						stats[sIdx].RxBytes,
+						batchStats[sIdx].TxBytes,
+						batchStats[sIdx].RxBytes,
 						srcNs,
 						srcPod,
 						dstNs,
@@ -241,14 +240,14 @@ func (a *Agent) Start() error {
 					))
 
 					entry := payload.FlowEntry{
-						PodInitiated:    stats[sIdx].PodInitiated,
-						Direction:       stats[sIdx].ConnDirection,
+						PodInitiated:    batchStats[sIdx].PodInitiated,
+						Direction:       batchStats[sIdx].ConnDirection,
 						SrcIP:           srcIp.To4().String(),
 						SrcPort:         sport,
 						DstIP:           dstIp.To4().String(),
 						DstPort:         dport,
-						TxBytes:         stats[sIdx].TxBytes,
-						RxBytes:         stats[sIdx].RxBytes,
+						TxBytes:         batchStats[sIdx].TxBytes,
+						RxBytes:         batchStats[sIdx].RxBytes,
 						SrcPodName:      srcPod,
 						SrcPodNamespace: srcNs,
 						DstPodName:      dstPod,
