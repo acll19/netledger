@@ -223,6 +223,8 @@ connect4 tells us if the process initiated the connection
 SEC("cgroup/connect4")
 int cg_connect4(struct bpf_sock_addr *ctx)
 {
+    if (ctx->protocol != IPPROTO_TCP) return 1;
+
     __u64 cookie = bpf_get_socket_cookie(ctx);
     struct conn_meta *meta = bpf_map_lookup_elem(&conn_meta, &cookie);
 
