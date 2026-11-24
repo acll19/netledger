@@ -11,7 +11,6 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
-	"strconv"
 	"sync"
 	"syscall"
 	"time"
@@ -167,126 +166,132 @@ func (a *Agent) Start() error {
 			slog.Info("Shutting down...")
 			return nil
 		case <-ticker.C:
-			sKeys = sKeys[:batch]
-			stats = stats[:batch]
 			opts := &ebpf.BatchOptions{}
 			cursor := new(ebpf.MapBatchCursor)
-			n, err := a.objs.ConnStats.BatchLookupAndDelete(cursor, sKeys, stats, opts)
-			var errMsg string
-			if err != nil && !errors.Is(err, ebpf.ErrKeyNotExist) {
-				errMsg = err.Error()
-			}
-			slog.Info("reading eBPF map", "received entries", strconv.Itoa(n), "err", errMsg, "mapSize", strconv.FormatUint(uint64(a.objs.ConnStats.MaxEntries()), 10))
-			if n <= 0 {
-				slog.Debug("no data, skipping")
-				continue
-			}
-			if err != nil && !errors.Is(err, ebpf.ErrKeyNotExist) {
-				slog.Error("failed to read data", "message", err.Error())
-				continue
-			}
 
-			sKeys = sKeys[:n]
-			stats = stats[:n]
-
-			slog.Debug("debug printing", "keys", len(sKeys), "started with", n)
-			entries := make([]payload.FlowEntry, 0, len(sKeys))
-
-			for i := range len(sKeys) {
-				// Filter out entries that are not associated with any cgroup (i.e., not associated with any process)
-				if stats[i].CgroupId == 0 {
-					continue
+			maxIterations := a.objs.ConnStats.MaxEntries() / batch
+			for i := 0; i < int(maxIterations); i++ {
+				n, err := a.objs.ConnStats.BatchLookupAndDelete(cursor, sKeys, stats, opts)
+				if n <= 0 {
+					slog.Debug("no data, skipping")
+					break
 				}
 
-				if stats[i].TxBytes == 0 && stats[i].RxBytes == 0 {
-					continue
-				}
+				sKeys = sKeys[:n]
+				stats = stats[:n]
 
-				var srcPod, srcNs, dstPod, dstNs string
-				var srcIp, dstIp net.IP
-				var sport, dport uint16
-				var pod *kubernetes.PodMeta
+				slog.Debug("debug printing", "keys", len(sKeys), "started with", n)
 
-				a.mLock.RLock()
-				pod = a.cgroupToPodCache[stats[i].CgroupId]
-				a.mLock.RUnlock()
-				if pod == nil {
-					// If the cgroup ID is not in the cache, it means we haven't seen a pod with that cgroup ID yet (or the pod has been deleted)
-					slog.Debug(
-						fmt.Sprintf("cgroup ID %d not found in cache", stats[i].CgroupId),
-						"src:port", fmt.Sprintf("%s:%d", network.Uint32ToIP(stats[i].DstIp4).To4().String(), stats[i].DstPort),
-						"dst:port", fmt.Sprintf("%s:%d", network.Uint32ToIP(stats[i].SrcIp4).To4().String(), stats[i].SrcPort),
-					)
-					continue
-				}
-
-				if stats[i].ConnDirection == network.Egress {
-					srcPod = pod.Name
-					srcNs = pod.Namespace
-					srcIp = network.Uint32ToIP(stats[i].SrcIp4)
-					sport = stats[i].SrcPort
-					dstIp = network.Uint32ToIP(stats[i].DstIp4)
-					dport = stats[i].DstPort
-				} else {
-					dstPod = pod.Name
-					dstNs = pod.Namespace
-					srcIp = network.Uint32ToIP(stats[i].DstIp4)
-					sport = stats[i].SrcPort
-					dstIp = network.Uint32ToIP(stats[i].SrcIp4)
-					dport = stats[i].DstPort
-				}
-
-				slog.Debug(fmt.Sprintf("[Direction %d|Pod Initiated %d] %s -> %s: %d tx bytes, %d rx bytes (srcPod: %s/%s, dstPod: %s/%s)",
-					stats[i].PodInitiated,
-					stats[i].ConnDirection,
-					fmt.Sprintf("%s:%d", srcIp.To4().String(), sport),
-					fmt.Sprintf("%s:%d", dstIp.To4().String(), dport),
-					stats[i].TxBytes,
-					stats[i].RxBytes,
-					srcNs,
-					srcPod,
-					dstNs,
-					dstPod,
-				))
-
-				entry := payload.FlowEntry{
-					PodInitiated:    stats[i].PodInitiated,
-					Direction:       stats[i].ConnDirection,
-					SrcIP:           srcIp.To4().String(),
-					SrcPort:         sport,
-					DstIP:           dstIp.To4().String(),
-					DstPort:         dport,
-					TxBytes:         stats[i].TxBytes,
-					RxBytes:         stats[i].RxBytes,
-					SrcPodName:      srcPod,
-					SrcPodNamespace: srcNs,
-					DstPodName:      dstPod,
-					DstPodNamespace: dstNs,
-				}
-				entries = append(entries, entry)
-			}
-
-			if len(entries) > 0 {
-				go func() {
-					slog.Debug(fmt.Sprintf("Sending %d entries to classifier", len(entries)))
-					serverCtx := context.WithoutCancel(context.Background())
-					err := a.sendDataToServer(serverCtx, entries, a.StartupTime)
-					if err != nil {
-						slog.Error(err.Error())
+				entries := make([]payload.FlowEntry, 0, len(sKeys))
+				for i := range len(sKeys) {
+					// Filter out entries that are not associated with any cgroup (i.e., not associated with any process)
+					if stats[i].CgroupId == 0 {
+						continue
 					}
-				}()
+
+					if stats[i].TxBytes == 0 && stats[i].RxBytes == 0 {
+						continue
+					}
+
+					var srcPod, srcNs, dstPod, dstNs string
+					var srcIp, dstIp net.IP
+					var sport, dport uint16
+					var pod *kubernetes.PodMeta
+
+					a.mLock.RLock()
+					pod = a.cgroupToPodCache[stats[i].CgroupId]
+					a.mLock.RUnlock()
+					if pod == nil {
+						// If the cgroup ID is not in the cache, it means we haven't seen a pod with that cgroup ID yet (or the pod has been deleted)
+						slog.Debug(
+							fmt.Sprintf("cgroup ID %d not found in cache", stats[i].CgroupId),
+							"src:port", fmt.Sprintf("%s:%d", network.Uint32ToIP(stats[i].DstIp4).To4().String(), stats[i].DstPort),
+							"dst:port", fmt.Sprintf("%s:%d", network.Uint32ToIP(stats[i].SrcIp4).To4().String(), stats[i].SrcPort),
+						)
+						continue
+					}
+
+					if stats[i].ConnDirection == network.Egress {
+						srcPod = pod.Name
+						srcNs = pod.Namespace
+						srcIp = network.Uint32ToIP(stats[i].SrcIp4)
+						sport = stats[i].SrcPort
+						dstIp = network.Uint32ToIP(stats[i].DstIp4)
+						dport = stats[i].DstPort
+					} else {
+						dstPod = pod.Name
+						dstNs = pod.Namespace
+						srcIp = network.Uint32ToIP(stats[i].DstIp4)
+						sport = stats[i].SrcPort
+						dstIp = network.Uint32ToIP(stats[i].SrcIp4)
+						dport = stats[i].DstPort
+					}
+
+					slog.Debug(fmt.Sprintf("[Direction %d|Pod Initiated %d] %s -> %s: %d tx bytes, %d rx bytes (srcPod: %s/%s, dstPod: %s/%s)",
+						stats[i].PodInitiated,
+						stats[i].ConnDirection,
+						fmt.Sprintf("%s:%d", srcIp.To4().String(), sport),
+						fmt.Sprintf("%s:%d", dstIp.To4().String(), dport),
+						stats[i].TxBytes,
+						stats[i].RxBytes,
+						srcNs,
+						srcPod,
+						dstNs,
+						dstPod,
+					))
+
+					entry := payload.FlowEntry{
+						PodInitiated:    stats[i].PodInitiated,
+						Direction:       stats[i].ConnDirection,
+						SrcIP:           srcIp.To4().String(),
+						SrcPort:         sport,
+						DstIP:           dstIp.To4().String(),
+						DstPort:         dport,
+						TxBytes:         stats[i].TxBytes,
+						RxBytes:         stats[i].RxBytes,
+						SrcPodName:      srcPod,
+						SrcPodNamespace: srcNs,
+						DstPodName:      dstPod,
+						DstPodNamespace: dstNs,
+					}
+					entries = append(entries, entry)
+				}
+
+				if len(entries) > 0 {
+					go func() {
+						slog.Debug(fmt.Sprintf("Sending %d entries to classifier", len(entries)))
+						serverCtx := context.WithoutCancel(context.Background())
+						err := a.sendDataToServer(serverCtx, entries, a.StartupTime)
+						if err != nil {
+							slog.Error(err.Error())
+						}
+					}()
+				}
+
+				// BatchLookupAndDelete can return both a positive count and ErrKeyNotExist when the final batch is partial
+				if errors.Is(err, ebpf.ErrKeyNotExist) {
+					break
+				} // reached the end
+				if err != nil {
+					slog.Error(err.Error())
+					break
+				}
 			}
 		}
 	}
 }
 
 func (a *Agent) sendDataToServer(ctx context.Context, flowEntries []payload.FlowEntry, startupTime int64) error {
+	a.mLock.RLock()
+	connMetaCurrentSize := a.connMetaCurrentSize
+	a.mLock.RUnlock()
+
 	content := payload.Encode(payload.Flow{
 		AgentNode:         a.Node,
 		StartupTime:       startupTime,
 		Entries:           flowEntries,
 		EbpfMapMaxEntries: a.objs.ConnMeta.MaxEntries(),
-		EbpfMapSize:       a.connMetaCurrentSize,
+		EbpfMapSize:       connMetaCurrentSize,
 	})
 	req, err := http.NewRequest("POST", a.Server, bytes.NewReader(content))
 	if err != nil {
@@ -362,53 +367,70 @@ func (a *Agent) cleanUpStaleConnections(ctx context.Context) {
 			mValues = mValues[:batch]
 			opts := &ebpf.BatchOptions{}
 			cursor := new(ebpf.MapBatchCursor)
-			n, err := a.objs.ConnMeta.BatchLookup(cursor, mKeys, mValues, opts)
-			if err != nil && !errors.Is(err, ebpf.ErrKeyNotExist) {
-				slog.Error("failed to read from conn_meta", "message", err.Error())
-				continue
-			}
 
-			if n <= 0 {
-				slog.Debug("no data in conn_meta, skipping")
-				continue
-			}
+			maxIterations := a.objs.ConnMeta.MaxEntries() / batch
+			var currentSize uint32
+			scanFinished := false
+			iterationLimit := int(maxIterations)
+			for batchIndex := range iterationLimit {
+				n, err := a.objs.ConnMeta.BatchLookup(cursor, mKeys, mValues, opts)
 
-			if err != nil && !errors.Is(err, ebpf.ErrKeyNotExist) {
-				slog.Error("failed to read from conn_meta", "message", err.Error())
-				continue
-			}
+				if n > 0 {
+					currentSize += uint32(n)
+					mKeys = mKeys[:n]
+					mValues = mValues[:n]
 
-			a.connMetaCurrentSize = uint32(n)
-			mKeys = mKeys[:n]
-			mValues = mValues[:n]
+					staledConns := make([]uint64, 0, n)
+					a.mLock.RLock()
+					for i := range len(mKeys) {
+						// 1. we delete the entry if its cgroup does not exists anymore
+						// 2. else, we delete the entry if it has been unestablished for TTL
+						cgroup := mValues[i].CgroupId
+						_, exist := a.cgroupToPodCache[cgroup]
+						if !exist {
+							staledConns = append(staledConns, mKeys[i])
+						} else if mValues[i].Established == 0 {
+							now := time.Now().UnixNano()
+							elapsed := now - int64(mValues[i].LastSeen)
+							duration := time.Duration(elapsed)
+							if int(duration.Minutes()) >= a.connUnestablishedTtlInMin {
+								staledConns = append(staledConns, mKeys[i])
+							}
+						}
+					}
+					a.mLock.RUnlock()
 
-			staledConns := make([]uint64, 0, n)
-			for i := range len(mKeys) {
-				// 1. we delete the entry if its cgroup does not exists anymore
-				// 2. else, we delete the entry if it has been unestablished for TTL
-				cgroup := mValues[i].CgroupId
-				a.mLock.RLock()
-				_, exist := a.cgroupToPodCache[cgroup]
-				a.mLock.RUnlock()
-				if !exist {
-					staledConns = append(staledConns, mKeys[i])
-				} else if mValues[i].Established == 0 {
-					now := time.Now().UnixNano()
-					elapsed := now - int64(mValues[i].LastSeen)
-					duration := time.Duration(elapsed)
-					if int(duration.Minutes()) >= a.connUnestablishedTtlInMin {
-						staledConns = append(staledConns, mKeys[i])
+					if len(staledConns) > 0 {
+						slog.Info("Cleaning up connections from conn_meta", "count", len(staledConns))
+						deleted, err := a.objs.ConnMeta.BatchDelete(staledConns, nil)
+						currentSize -= uint32(deleted)
+						if err != nil {
+							slog.Error("failed to delete from conn_meta", "message", err.Error())
+						}
 					}
 				}
+
+				if errors.Is(err, ebpf.ErrKeyNotExist) {
+					scanFinished = true
+					break
+				} // reached the end
+				if err != nil {
+					slog.Error("failed to read from conn_meta", "message", err.Error())
+					break
+				}
+				if n == 0 {
+					slog.Debug("no data in conn_meta, skipping")
+					break
+				}
+				if batchIndex == iterationLimit-1 {
+					scanFinished = true
+				}
 			}
 
-			if len(staledConns) > 0 {
-				slog.Info("Cleaning up connections from conn_meta", "count", len(staledConns))
-				if _, err := a.objs.ConnMeta.BatchDelete(staledConns, nil); err != nil {
-					slog.Error("failed to delete from conn_meta", "message", err.Error())
-				} else {
-					a.connMetaCurrentSize -= uint32(len(staledConns))
-				}
+			if scanFinished {
+				a.mLock.Lock()
+				a.connMetaCurrentSize = currentSize
+				a.mLock.Unlock()
 			}
 		}
 	}
