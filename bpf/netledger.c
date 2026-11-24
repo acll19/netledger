@@ -184,11 +184,11 @@ int tcp_sockops(struct bpf_sock_ops *skops)
 
     /* Only care about TCP IPv4 for now */
     if (skops->family != AF_INET)
-        return 0;
+        return 1;
 
     __u64 cookie = bpf_get_socket_cookie(skops);
     if (!cookie)
-        return 0;
+        return 1;
 
     switch (skops->op)
     {
@@ -248,7 +248,7 @@ int cg_ingress(struct __sk_buff *skb)
 {
     __u64 cookie = bpf_get_socket_cookie(skb);
     if (!cookie)
-        return 0;
+        return 1;
 
     struct conn_tuple pkt = {};
     __u8 tcp_state = 0;
@@ -321,7 +321,7 @@ int cg_egress(struct __sk_buff *skb)
 {
     __u64 cookie = bpf_get_socket_cookie(skb);
     if (!cookie)
-        return 0;
+        return 1;
 
     struct conn_tuple pkt = {};
     __u8 tcp_state = 0;
