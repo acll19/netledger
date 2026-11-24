@@ -223,7 +223,8 @@ connect4 tells us if the process initiated the connection
 SEC("cgroup/connect4")
 int cg_connect4(struct bpf_sock_addr *ctx)
 {
-    if (ctx->protocol != IPPROTO_TCP) return 1;
+    if (ctx->protocol != IPPROTO_TCP)
+        return 1;
 
     __u64 cookie = bpf_get_socket_cookie(ctx);
     struct conn_meta *meta = bpf_map_lookup_elem(&conn_meta, &cookie);
@@ -260,12 +261,17 @@ int cg_ingress(struct __sk_buff *skb)
         return 1; // Non-TCP/UDP, skip
 
     struct conn_stats *stats = bpf_map_lookup_elem(&conn_stats, &cookie);
-    struct conn_meta *meta = bpf_map_lookup_elem(&conn_meta, &cookie);
 
     if (pkt.proto == IPPROTO_TCP)
     {
-        if (meta && !stats)
+        if (!stats)
         {
+            struct conn_meta *meta = bpf_map_lookup_elem(&conn_meta, &cookie);
+            if (!meta)
+            {
+                return 1;
+            }
+
             meta->last_seen = bpf_ktime_get_ns();
             bpf_map_update_elem(&conn_meta, &cookie, meta, BPF_EXIST);
 
@@ -333,12 +339,17 @@ int cg_egress(struct __sk_buff *skb)
         return 1; // Non-TCP/UDP, skip
 
     struct conn_stats *stats = bpf_map_lookup_elem(&conn_stats, &cookie);
-    struct conn_meta *meta = bpf_map_lookup_elem(&conn_meta, &cookie);
 
     if (pkt.proto == IPPROTO_TCP)
     {
-        if (meta && !stats)
+        if (!stats)
         {
+            struct conn_meta *meta = bpf_map_lookup_elem(&conn_meta, &cookie);
+            if (!meta)
+            {
+                return 1;
+            }
+
             meta->last_seen = bpf_ktime_get_ns();
             bpf_map_update_elem(&conn_meta, &cookie, meta, BPF_EXIST);
 
