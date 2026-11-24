@@ -169,13 +169,15 @@ func (s *Server) handlePod(obj any) {
 	}
 
 	s.mutex.Lock()
-	s.podIndex[metrics.PodKey{
+	key := metrics.PodKey{
 		Namespace: pod.Namespace,
 		Name:      pod.Name,
-	}] = classifier.PodInfo{
+	}
+	s.podIndex[key] = classifier.PodInfo{
 		Node: pod.Spec.NodeName,
 		IPs:  ips,
 	}
+
 	for _, ip := range ips {
 		// If the pod IP matches the host IP, it's using hostNetwork
 		// In this case, use the node as the key instead of the pod
@@ -275,6 +277,8 @@ func (s *Server) onNodeAdd(obj any) {
 		Zone:       zone,
 		InternalIp: ip,
 	}
+	parsedIp := net.ParseIP(ip)
+	s.nodeIpIndex[network.IpToUint32(parsedIp)] = node.Name
 	s.mutex.Unlock()
 }
 
